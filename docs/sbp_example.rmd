@@ -1,0 +1,70 @@
+---
+title: "Comparison of European and Asian GWAS for Systolic Blood Pressure"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ieugwasr)
+```
+
+
+
+## Systolic blood pressure
+
+```{r}
+sbp_bbj <- tophits("bbj-a-52")
+sbp_ukb <- tophits("ukb-b-20175")
+
+temp1 <- associations(sbp_ukb$rsid, "bbj-a-52")
+temp2 <- associations(sbp_bbj$rsid, "ukb-b-20175")
+```
+
+
+```{r}
+inner_join(sbp_bbj, temp2, by="rsid") %>%
+	{
+		summary(lm(beta.y ~ beta.x, .))
+	}
+```
+
+
+```{r}
+inner_join(sbp_ukb, temp1, by="rsid") %>%
+	{
+		summary(lm(beta.y ~ beta.x, .))
+	}
+```
+
+```{r}
+inner_join(sbp_ukb, temp1, by="rsid") %>%
+	ggplot(aes(beta.x, beta.y)) +
+	geom_point() +
+	geom_smooth(method="lm") +
+  geom_abline(slope=1, linetype="dotted")
+```
+
+```{r}
+inner_join(sbp_bbj, temp2, by="rsid") %>%
+	ggplot(aes(beta.x, beta.y)) +
+	geom_point() +
+	geom_smooth(method="lm") +
+  geom_abline(slope=1, linetype="dotted")
+```
+
+
+```{r}
+inner_join(sbp_bbj, temp2, by="rsid") %>%
+	summarise(not_replicated=sum(p.y > 0.05), wrong_sign=sum(sign(beta.x) != sign(beta.y)))
+```
+
+```{r}
+inner_join(sbp_ukb, temp1, by="rsid") %>%
+	summarise(not_replicated=sum(p.y > 0.05), wrong_sign=sum(sign(beta.x) != sign(beta.y)))
+```
+
+### Conclusions
+
+- Could improve the concordance by using fine mapping and evaluating winner's curse
+- It looks like there are some genuinely ancestry-specific effects
+
