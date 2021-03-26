@@ -1,0 +1,465 @@
+---
+title: "Pleiotropy simulations"
+output: html_notebook
+---
+
+
+```{r}
+
+### Introducing pleiotropy
+
+
+
+
+```{r}
+effects1 <- effects2 <- choose_effects(200, 0.4)
+effects1[1:50] <- 0
+effects2[51:100] <- 0
+
+# create genotypes
+g1 <- make_geno(10000, 200, 0.5)
+g2 <- make_geno(10000, 200, 0.5)
+
+# create confounder
+u1 <- rnorm(10000)
+u2 <- rnorm(10000)
+
+# create x
+x1 <- make_phen(c(0.1, effects1), cbind(u1, g1))
+x2 <- make_phen(c(0.1, effects2), cbind(u2, g2))
+
+plei <- choose_effects(200, 0.4)
+
+# create y
+y1 <- make_phen(c(0.1, 0.2, plei), cbind(u1, x1, g1))
+y2 <- make_phen(c(0.1, 0.2, plei), cbind(u2, x2, g2))
+
+# Summary data for pop1 
+ss1 <- get_effs(x1, y1, g1)
+
+# Summary data for pop2
+ss2 <- get_effs(x2, y2, g2)
+
+mres1 <- mr(ss1, method="mr_ivw")
+mres2 <- mr(ss2, method="mr_ivw")
+
+
+plot(beta.outcome ~ beta.exposure, ss1)
+abline(a=0, b=1)
+abline(a=0, b=mres1$b, col="red")
+
+# Organise the data
+dat <- tibble(
+	y1 = ss1$beta.outcome,
+	y2 = ss2$beta.outcome,
+	x1 = ss1$beta.exposure,
+	x2 = ss2$beta.exposure
+)
+
+dat$xb <- rowMeans(cbind(dat$x1, dat$x2))
+dat$xb[1:100] <- 0
+dat$x1[1:50] <- 0
+dat$x1[101:200] <- 0
+dat$x2[51:100] <- 0
+dat$x2[101:200] <- 0
+
+model <- '
+y1 ~ b_1*x1 + b_1*xb + p_1*x2
+y2 ~ p_2*x1 + b_2*xb + b_2*x2
+x1 ~~ 0 * x2
+x1 ~~ 0 * xb
+x2 ~~ 0 * xb
+'
+cor(dat)
+```
+```{r}
+mod <- sem(model, data=dat)
+summary(mod)
+```
+
+
+```{r}
+semPaths(mod, edge.label.cex = 0.7, edge.label.position=0.7)
+```
+
+```{r}
+nsnp <- 200
+map <- tibble(
+	snp=1:200,
+	af=0.5
+) %>%
+	mutate(beta = 
+		case_when(
+			snp > 
+	))
+
+
+xp <- generate_gwas_params(map, 0.4)
+
+x1p <- xp %>%
+	mutate(beta = 
+		case_when(
+			snp <= 50 ~ 0,
+			TRUE ~ beta
+		)
+	)
+
+y1p <- x1p %>%
+	mutate(beta = beta * 0.2 + 0.1)
+
+x2p <- xp %>%
+	mutate(beta = 
+		case_when(
+			snp > 50 & snp <= 100 ~ 0,
+			TRUE ~ beta
+		)
+	)
+
+y2p <- x2p %>%
+	mutate(beta = beta * 0.2 + 0.1)
+
+yp <- xp %>%
+	mutate(beta = beta * 0.2)
+
+summary(lm(yp$beta ~ -1 + xp$beta))
+summary(lm(y1p$beta ~ -1 + x1p$beta))
+summary(lm(y2p$beta ~ -1 + x2p$beta))
+
+y1 <- generate_gwas_ss(y1p, 1000000)
+y2 <- generate_gwas_ss(y2p, 1000000)
+x1 <- generate_gwas_ss(x1p, 1000000)
+x2 <- generate_gwas_ss(x2p, 1000000)
+
+dat <- tibble(
+	y1 = y1$bhat,
+	y2 = y2$bhat,
+	x1 = x1$bhat,
+	x2 = x2$bhat
+)
+
+dat$xb <- rowMeans(cbind(dat$x1, dat$x2))
+dat$xb[1:100] <- 0
+dat$x1[1:50] <- 0
+dat$x1[101:200] <- 0
+dat$x2[51:100] <- 0
+dat$x2[101:200] <- 0
+
+summary(lm(cbind(y1, y2) ~ -1 + x1 + x2 + xb, dat))
+
+
+summary(lm(y1$bhat ~ -1 + x1$bhat))
+
+
+model <- '
+# linear model
+y1 ~ b11*x1 + b11*xb + p1*x2
+y2 ~ p2*x1 + b22*xb + b22*x2
+'
+
+mod <- sem(model, data=dat, meanstructure=FALSE)
+summary(mod)
+
+
+model <- '
+# linear model
+y1 ~ b11*x1 + b11*xb + p1*x2
+y2 ~ p2*x1 + b22*xb + b22*x2
+'
+
+mod <- sem(model, data=dat, meanstructure=FALSE)
+summary(mod)
+
+
+dat2 <- tibble(
+	w1 = abs(x1$bhat) / y1$se,
+	w2 = abs(x2$bhat) / y2$se,
+	Y1 = y1$bhat / x1$bhat * w1,
+	Y2 = y2$bhat / x2$bhat * w2,
+)
+
+summary(lm(Y1 ~ -1 + w1, dat2))
+summary(lm(y1$bhat ~ -1 + x1$bhat, weight=1/y1$se^2))
+
+
+
+
+
+model <- '
+y1 ~ xb + x1
+'
+summary(sem(model, data=dat))
+
+
+
+up <- map %>%
+	generate_gwas_params(., 0.1)
+
+xp <- up %>%
+	mutate(beta=beta * 0.2)
+
+yp <- up %>%
+	mutate(beta=beta * 0.4 + beta * 0.3)
+
+x1p <- xp %>%
+	mutate(beta = 
+		case_when(
+			snp <= 50 ~ 0,
+			TRUE ~ beta
+		)
+	)
+
+y1p <- x1p %>%
+	mutate(beta = case_when(
+		beta == 0 ~ beta * 0.4,
+		TRUE ~ beta * 0.4 + beta * 0.3
+	))
+
+x2p <- xp %>%
+	mutate(beta = 
+		case_when(
+			snp > 50 & snp <= 100 ~ 0,
+			TRUE ~ beta
+		)
+	)
+
+y2p <- x2p %>%
+	mutate(beta = case_when(
+		beta == 0 ~ beta * 0.4,
+		TRUE ~ beta * 0.4 + beta * 0.3
+	))
+
+plot(y1p$beta ~ x1p$beta)
+
+summary(lm(yp$beta ~ xp$beta))
+
+summary(lm(y2p$beta ~ x1p$beta, subset=x1p$beta == 0))
+
+
+
+####
+
+
+# create genotypes
+g1 <- make_geno(10000, 200, 0.5)
+g2 <- make_geno(10000, 200, 0.5)
+
+# create confounder
+plei1 <- plei2 <- choose_effects(200, 0.4)
+effects1[1:50] <- 0
+effects2[51:100] <- 0
+u1 <- make_phen(plei, g1)
+u2 <- make_phen(plei, g2)
+
+x1 <- make_phen(0.6, u1)
+x2 <- make_phen(0.6, u2)
+
+y1 <- make_phen(c(0.6, -0.4), cbind(u1, x1))
+y2 <- make_phen(c(0.6, -0.4), cbind(u2, x2))
+
+
+# Summary data for pop1 
+ss1 <- get_effs(x1, y1, g1)
+
+# Summary data for pop2
+ss2 <- get_effs(x2, y2, g2)
+
+(mres1 <- mr(ss1, method="mr_ivw"))
+(mres2 <- mr(ss2, method="mr_ivw"))
+
+
+plot(beta.outcome ~ beta.exposure, ss1)
+abline(a=0, b=1)
+abline(a=0, b=mres1$b, col="red")
+
+# Organise the data
+dat <- tibble(
+	y1 = ss1$beta.outcome,
+	y2 = ss2$beta.outcome,
+	x1 = ss1$beta.exposure,
+	x2 = ss2$beta.exposure
+)
+
+dat$xb <- rowMeans(cbind(dat$x1, dat$x2))
+dat$xb[1:100] <- 0
+dat$x1[1:50] <- 0
+dat$x1[101:200] <- 0
+dat$x2[51:100] <- 0
+dat$x2[101:200] <- 0
+
+
+model <- '
+y1 ~ b_1*x1 + b_1*xb + p_1*x2
+y2 ~ p_2*x1 + b_2*xb + b_2*x2
+'
+
+mod <- sem(model, data=dat)
+summary(mod)
+
+
+########
+
+# try again
+
+
+# create genotypes
+g1 <- make_geno(10000, 50, 0.5)
+g2 <- make_geno(10000, 50, 0.5)
+gb <- make_geno(10000, 100, 0.5)
+
+eff1 <- choose_effects(50, 0.2)
+eff2 <- choose_effects(50, 0.2)
+effb <- choose_effects(100, 0.2)
+x1 <- make_phen(eff1, g1)
+x2 <- make_phen(eff2, g2)
+xb <- make_phen(effb, gb)
+
+plei1 <- choose_effects(50, 0.1)
+plei2 <- choose_effects(50, 0.1)
+y1 <- make_phen(c(eff1, eff2, effb, 0.2, 0.2), cbind(g1, g2, gb, x1, xb))
+y2 <- make_phen(c(eff1, eff2, effb, 0.2, 0.2), cbind(g1, g2, gb, x2, xb))
+
+
+
+
+# Summary data for pop1 
+ss1 <- get_effs(x1, y1, g1)
+
+# Summary data for pop2
+ss2 <- get_effs(x2, y2, g2) %>% mutate(SNP = SNP + 50)
+
+ssb1 <- get_effs(xb, y1, gb) %>% mutate(SNP = SNP + 100)
+ssb2 <- get_effs(xb, y2, gb) %>% mutate(SNP = SNP + 100)
+
+
+mres1 <- mr(ss1, method="mr_ivw")
+mres2 <- mr(ss2, method="mr_ivw")
+
+
+plot(beta.outcome ~ beta.exposure, ss1)
+abline(a=0, b=1)
+abline(a=0, b=mres1$b, col="red")
+
+# Organise the data
+dat <- tibble(
+	y1 = ss1$beta.outcome,
+	y2 = ss2$beta.outcome,
+	x1 = ss1$beta.exposure,
+	x2 = ss2$beta.exposure
+)
+
+dat$xb <- rowMeans(cbind(dat$x1, dat$x2))
+dat$xb[1:100] <- 0
+dat$x1[1:50] <- 0
+dat$x1[101:200] <- 0
+dat$x2[51:100] <- 0
+dat$x2[101:200] <- 0
+
+
+
+
+
+model <- '
+y1 ~ b_1*x1 + b_1*xb + p_1*x2
+y2 ~ p_2*x1 + b_2*xb + b_2*x2
+x1 ~~ 0 * x2
+x1 ~~ 0 * xb
+x2 ~~ 0 * xb
+'
+
+mod <- sem(model, data=dat)
+summary(mod)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+effx <- choose_effects(50, 0.2)
+effp <- (rnorm(50, sd=sd(effx)/2) + effx) %>% scale() %>% {. * sd(effx)}
+cor(effx, effp)
+
+g <- make_geno(10000, 50, 0.5)
+colnames(g) <- paste0("g", 1:50)
+p <- make_phen(effp, g)
+x <- make_phen(effx, g)
+y <- make_phen(c(0.2,-0.2), cbind(x, p))
+
+d <- get_effs(x,y,g)
+(r <- mr(d, method="mr_ivw"))
+mr_scatter_plot(r, d)
+
+library(glue)
+mod <- glue('
+	x ~ {paste(paste0("g", 1:50), collapse="+")}
+	y ~ b * x
+')
+dat <- data.frame(g, x=x, y=y)
+m <- sem(mod, data=dat)
+summary(m)
+
+summary(lm(y ~ x))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n <- 100
+d <- tibble(
+	g1 = rnorm(n),
+	g2 = rnorm(n),
+	gb = rnorm(n),
+	x1 = rnorm(n),
+	x2 = rnorm(n),
+	xb = rnorm(n),
+	y1 = rnorm(n),
+	y2 = rnorm(n)
+)
+
+m <- '
+y1 ~ b1 * x1 + b1 * xb
+y2 ~ b2 * x2 + b2 * xb
+x1 ~ g1
+xb ~ gb
+x2 ~ g2
+g1 ~~ 0 * gb
+g1 ~~ 0 * g2
+g2 ~~ 0 * gb
+'
+
+mod <- sem(m, data=d)
+semPlot::semPaths(mod, layout="tree2")
+semPlot::semPaths(mod, layout="circle")
+
+
+lay <- tidySEM::get_layout(
+"g1", "", "gb", "", "g2",
+"x1", "", "xb", "", "x2",
+"", "y1", "", "y2", "", rows=3
+)
+
+tidySEM::graph_sem(mod, layout=lay)
+
+```
+
+
+
+
+
+```
