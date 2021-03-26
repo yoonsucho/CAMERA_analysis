@@ -1,6 +1,13 @@
-# mr.trans
+# Trans ancestral design for Mendelian Randomization
 
 Develop trans-ancestral model for MR
+
+## Background
+Emerging availability of large scale GWAS in non-European populations has enabled `trans-ancestral' studies that are conducted using more than one population. Trans-ancestral study design have been suggested to overcome existing issues with limited sample sizes available for many diseases. 
+
+There have been a few studies that introduced trans-ancestral design to MR. However, no guideline exist for conducting and reporting trans-ancestral MR so far. Here, we simulated possible scenarios for trans-ancestral MR to provide a guideline for the trans-ancestral MR study design.
+
+---
 
 ## To do:
 
@@ -58,6 +65,4 @@ Check if the pleiotropy estimation method works under different scenarios
 - Directional pleiotropy
 - Pleiotropy correlated with SNP-exposure effect
 - False negatives in the SNP1-exposure2 estimates
-
-
 
