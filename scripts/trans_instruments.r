@@ -2,6 +2,8 @@ library(ieugwasr)
 library(gwasglue)
 library(TwoSampleMR)
 library(susieR)
+library(ggplot2)
+library(dplyr)
 
 
 susie_overlaps <- function(su1, su2)
@@ -116,25 +118,6 @@ trans_mr_instruments <- function(id1, id2, radius, pop1=NULL, pop2=NULL, plink=N
 	return(list(inst=inst, res=res, info=l))
 }
 
-
-plot_region <- function(region)
-{
-	lapply(list(region$a1, region$a2), function(x)
-		x %>%
-			dplyr::select(pval.exposure, position.exposure, id.exposure)
-		) %>% bind_rows() %>%
-		ggplot(., aes(x=position.exposure, y=-log10(pval.exposure))) +
-		geom_point() +
-		facet_grid(id.exposure ~ .)
-}
-plot_region(l[[200]])
-plot_region(l[[207]])
-
-susie_plot(l[[2]]$su1, "PIP")
-susie_plot(l[[2]]$su2, "PIP")
-
-
-
 finemap_region <- function(chr, position, radius, id1, id2, plink=NULL, bfile1=NULL, bfile2=NULL, pop1=NULL, pop2=NULL)
 {
 	r <- paste0(chr, ":", max(0, position-radius), "-", position+radius)
@@ -221,6 +204,18 @@ finemap_region <- function(chr, position, radius, id1, id2, plink=NULL, bfile1=N
 	return(out)
 }
 
+plot_region <- function(region)
+{
+	lapply(list(region$a1, region$a2), function(x)
+		x %>%
+			dplyr::select(pval.exposure, position.exposure, id.exposure)
+		) %>% bind_rows() %>%
+		ggplot(., aes(x=position.exposure, y=-log10(pval.exposure))) +
+		geom_point() +
+		facet_grid(id.exposure ~ .)
+}
+
+
 
 
 radius=50000
@@ -237,13 +232,27 @@ prune_pop="EUR"
 
 inst <- trans_mr_instruments(id1, id2, radius, plink=plink, bfile1=bfile1, bfile2=bfile2, ld_thresh=ld_thresh, prune_bfile=bfile1)
 
+
+inst$res
+
 which(inst$res$cs_overlap)
+
 
 plot_region(inst$info[[100]])
 susie_plot(inst$info[[100]]$su1, "PIP")
+dev.new()
 susie_plot(inst$info[[100]]$su2, "PIP")
 
+table(inst$res$cs_overlap)
 
+dim(inst$res)
+table(inst$res$type)
 
 saveRDS(inst, file="sbp_eas_eur.rds")
+
+plot_region(l[[200]])
+plot_region(l[[207]])
+
+susie_plot(l[[2]]$su1, "PIP")
+susie_plot(l[[2]]$su2, "PIP")
 
