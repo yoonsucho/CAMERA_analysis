@@ -1,0 +1,254 @@
+---
+title: "Fine mapping across populations"
+output: html_notebook
+---
+
+Instrument generation
+
+Exposure and outcome data is available in two populations. e.g. SBP and CHD
+
+1. Tophits from pop1
+2. Tophits from pop2
+3. Lookup tophits from pop1 in pop2 - X1 = anything in pop1 that has p > 0.05 in pop2
+4. Lookup tophits from pop2 in pop1 - X2 = anything in pop2 that has p > 0.05 in pop1
+5. Create Xb. Anything from pop1 or pop2 that has p < 0.05 / nsnp and the effect is in the same direction in pop2 or pop1 is to be kept
+6. Finemap SNPs in pop1 - get credible sets in each region
+7. Finemap SNPs in pop2 - get credible sets in each region
+8. Find overlapping credible sets between the populations - define the best SNP by ranking the shared SNPs by p-value in each pop, summing the rank and keeping the lowest value
+9. If there are multiple credible sets in the region, just keep one shared effect and discard everything else
+10. Meta-analyse the effects (IVW) to get Xb
+11. Create a data from of exposure data - X1, Xb, X2
+
+```{r}
+library(ieugwasr)
+library(susieR)
+id1 <- "bbj-a-52"
+id2 <- "ukb-b-20175"
+fn <- function(id1, id2, alpha=0.05, method="fdr", ld_thresh=0.05, bfile=NULL, plink=NULL, ld_pop="EUR")
+{
+  p1th <- tophits(id1)
+  p2th <- tophits(id2)
+  lu <- dplyr::bind_rows(
+    associations(p2th$rsid, id1) %>%
+      dplyr::select(rsid, chr, position, ea, nea, id, beta, se, p),
+    associations(p1th$rsid, id2) %>%
+      dplyr::select(rsid, chr, position, ea, nea, id, beta, se, p)
+  )
+  lu$pvaladjust <- p.adjust(lu$p, method)
+  rsid <- unique(lu$rsid)
+  ld <- ld_matrix(rsid, pop=ld_pop, bfile=bfile, plink=plink)
+  ldnom <- rownames(ld) %>% strsplit(., split="_") %>% sapply(., function(x) x[1])
+  rem <- greedy_remove(ld, sqrt(thresh))
+  to_remove <- ldnom[rem] %>% strsplit(., split="_") %>% sapply(., function(x) x[1])
+  to_remove <- c(to_remove, rsid[!rsid %in% ldnom])
+  lu <- subset(lu, !rsid %in% to_remove)
+  subset(lu, pvaladjust < alpha)
+  table(lu$pvaladjust < alpha)
+  table(lu$p < alpha)  
+}
+
+greedy_remove <- function(r, thresh)
+{
+  diag(r) <- 0
+  r <- abs(r)
+  flag <- 1
+  rem <- c()
+  nom <- colnames(r)
+  while(flag == 1)
+  {
+      message("iteration")
+      count <- apply(r, 2, function(x) sum(x >= thresh))
+      if(any(count > 0))
+      {
+          worst <- which.max(count)[1]
+          rem <- c(rem, names(worst))
+          r <- r[-worst,-worst]
+      } else {
+          flag <- 0
+      }
+  }
+  return(which(nom %in% rem))
+}
+
+radius <- 50000
+chr <- 1
+position <- 6681275
+credible_sets_per_region <- function(chrpos, id1, id2, bfile1, bfile2, plink, radius, pop1, pop2)
+{
+  r <- paste0(chr, ":", max(0, position-radius), "-", position+radius)
+  a <- associations(r, c(id1, id2)) %>%
+    dplyr::group_by(id) %>%
+    dplyr::mutate(pvaladjust = p.adjust(p, method)) %>%
+  a
+  tab <- table(a$rsid)
+  ld1 <- ld_matrix(subset(a, id==id1)$rsid, pop=pop1, with_alleles=FALSE)
+  ld2 <- ld_matrix(subset(a, id==id2)$rsid, pop=pop2, with_alleles=FALSE)
+  
+  susie1 <- 
+  
+}
+
+
+
+lookup_credible_sets <- function()
+{
+  for i in credible set
+    look up in both pops
+    are there any overlapping associations
+}
+
+
+
+library(ieugwasr)
+library(TwoSampleMR)
+library(gwasglue)
+
+chr=1
+position=6681275
+radius=50000
+id="ukb-b-20175"
+bfile=NULL
+plink=NULL
+pop="EUR"
+
+
+
+run_susie <- function(chr, position, radius, id, bfile, plink, pop)
+{
+  r <- paste0(chr, ":", max(0, position-radius), "-", position+radius)
+  a <- ieugwasr::associations(r, id) %>% gwasglue::ieugwasr_to_TwoSampleMR(.)
+  out <- TwoSampleMR::harmonise_ld_dat(a, ieugwasr::ld_matrix(a$SNP, pop=pop, with_alleles=TRUE))
+  su <- susieR::susie_rss(z = out$x$beta.exposure / out$x$se.exposure, R = out$ld, check_R=FALSE)
+  susieR::susie_plot(su, y="PIP")
+}
+
+
+susie_overlaps <- function(su1, su2, pip_threshold=0.2)
+{
+  su1$sets
+}
+
+
+
+
+library(simulateGP)
+ldobj <- readRDS("~/data/ld_files/ldmat/EUR_1kg_hm3/ldobj_chr9_30387392_31310382.rds")
+params <- ldobj$map %>%
+  generate_gwas_params(h2=0.04, Pi=2/nrow(ldobj$map)) %>%
+  generate_gwas_ss(1000, ldobj=ldobj)
+
+su <- susieR::susie_rss(params$bhat/params$se, R = ldobj$ld, check_R=FALSE)
+susieR::susie_plot(su, y="PIP", b=params$beta)
+su$sets
+
+
+
+X <- MASS::mvrnorm(1000, rep(0, nrow(ldobj$ld)), ldobj$ld %*% diag(2 * ldobj$map$af * (1-ldobj$map$af)%>% sqrt()) )
+dim(X)
+params <- ldobj$map %>%
+  generate_gwas_params(h2=0.04, Pi=2/nrow(ldobj$map))
+y <- X %*% params$beta + rnorm(1000)
+out <- gwas(y, X)
+su2 <- susieR::susie_rss(out$bhat / out$se, R = ldobj$ld, check_R=FALSE, L=4)
+susieR::susie_plot(su2, y="PIP", b=params$beta)
+su2$sets
+
+plot(sqrt(out$fval), )
+
+plot(-log10(out$pval))
+plot(-log10(params$pval))
+
+
+
+
+
+
+
+r <- list(ld=ldobj$ld[1:10,1:10], map=ldobj$map[1:10,])
+
+p <- params[1:10,] %>%
+  generate_gwas_ss(1000, ldobj=r)
+
+
+diag(p$se) %*% diag(p$se)
+
+p$se^2
+
+diag(p$se) %*% r$ld %*% diag(p$se)
+
+
+library(tidyverse)
+library(simulateGP)
+
+# function to generate correlated variables
+make_correlated_vars <- function(nid, nsnp)
+{
+  x <- matrix(0, nid, nsnp)
+  x[,1] <- rbinom(nid, 2, 0.5)
+  for(i in 2:nsnp)
+  {
+    x[,i] <- rbinom(nid, 2, plogis(scale(x[,i-1])))
+  }
+  return(x)
+}
+
+
+# Simulate correlated variables
+nid <- 1000000
+nsnp <- 10
+X <- make_correlated_vars(nid, nsnp)
+rho <- cor(X)
+heatmap(rho)
+b <- c(0.4, rep(0, nsnp-2), 0.4)
+
+# Get estimates from individual level data
+y <- X %*% b + rnorm(nid)
+out <- gwas(y, X)
+
+# Now from summary data directly
+map <- tibble(snp=1:10, af=colMeans(X)/2)
+out2 <- map %>%
+  mutate(beta=b) %>%
+  generate_gwas_ss(nid, ldobj=list(ld=rho, map=map))
+
+# Compare beta estimates
+plot(out2$bhat ~ out$bhat)
+
+# Compare se
+plot(out2$se ~ out$se)
+
+
+# Simulate more simply
+out3 <- map %>%
+  mutate(beta = b %*% rho %>% drop()) %>%
+  generate_gwas_ss(nid)
+
+plot(out3$bhat ~ out$bhat)
+plot(out3$se ~ out$se)
+
+
+
+
+
+
+X <- matrix(rbinom(nid * nsnp, 2, 0.5), nid, nsnp)
+y <- X %*% b + rnorm(nid)
+out <- gwas(y, X)
+
+rho <- cor(X)
+map <- tibble(snp=1:10, af=colMeans(X)/2)
+out2 <- map %>%
+  mutate(beta=b) %>%
+  generate_gwas_ss(nid, ldobj=list(ld=rho, map=map))
+plot(out2$bhat ~ out$bhat)
+plot(out2$se ~ out$se)
+
+
+
+
+
+
+
+
+```
+

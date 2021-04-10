@@ -233,6 +233,39 @@ prune_pop="EUR"
 inst <- trans_mr_instruments(id1, id2, radius, plink=plink, bfile1=bfile1, bfile2=bfile2, ld_thresh=ld_thresh, prune_bfile=bfile1)
 
 
+d <- associations(inst$res$bestsnp[!is.na(inst$res$bestsnp)], args$ids)
+d$padj <- p.adjust(d$p, "fdr")
+dplyr::select(d, rsid, id, padj) %>%
+	dplyr::group_by(rsid, id) %>%
+	dplyr::slice(1) %>%
+	pivot_wider(names_from=id, values_from=padj) %>%
+	ungroup() %>%
+	summarise(s1 = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` > 0.5), s2 = sum(`bbj-a-52` > 0.5 & `ukb-b-20175` < 0.05), sb = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` < 0.05))
+
+inst$inst %>%
+	mutate(padj = p.adjust(pval.exposure, "fdr")) %>%
+	dplyr::select(rsid=SNP, id=id.exposure, padj) %>%
+	dplyr::group_by(rsid, id) %>%
+	dplyr::slice(1) %>%
+	pivot_wider(names_from=id, values_from=padj) %>%
+	ungroup() %>%
+	summarise(s1 = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` > 0.5), s2 = sum(`bbj-a-52` > 0.5 & `ukb-b-20175` < 0.05), sb = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` < 0.05))
+
+table(d$rsid %in% inst$inst$SNP)
+
+d3 <- independent_instruments(args$ids[1], args$ids[2])
+
+d4 <- associations(d3$rsid, args$ids)
+d4$padj <- p.adjust(d4$p, "fdr")
+dplyr::select(d4, rsid, id, padj) %>%
+	dplyr::group_by(rsid, id) %>%
+	dplyr::slice(1) %>%
+	pivot_wider(names_from=id, values_from=padj) %>%
+	ungroup() %>%
+	summarise(s1 = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` > 0.5), s2 = sum(`bbj-a-52` > 0.5 & `ukb-b-20175` < 0.05), sb = sum(`bbj-a-52` < 0.05 & `ukb-b-20175` < 0.05))
+
+
+
 inst$res
 
 which(inst$res$cs_overlap)
