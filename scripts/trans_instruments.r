@@ -4,128 +4,338 @@ library(TwoSampleMR)
 library(susieR)
 library(ggplot2)
 library(dplyr)
+library(winnerscurse)
 
 MultiAncestrySummarySet <- R6::R6Class("MultiAncestrySummarySet", list(
-  output = list(),
-  exposure_ids=NULL,
-  outcome_ids=NULL,
-  pops=NULL,
-  bfiles=NULL,
-  plink=NULL,
-  raw_instruments=NULL,
-  instrument_regions = NULL,
-  ld_matrices = NULL,
-  susie_results = NULL,
-  paintor_results = NULL,
-  expected_replications = NULL,
+	output = list(),
+	exposure_ids=NULL,
+	outcome_ids=NULL,
+	radius=NULL,
+	pops=NULL,
+	bfiles=NULL,
+	plink=NULL,
+	clump_pop=NULL,
+	instrument_raw=NULL,
+	instrument_regions = NULL,
+	ld_matrices = NULL,
+	susie_results = NULL,
+	paintor_results = NULL,
+	expected_replications = NULL,
+	instrument_region_zscores = NULL,
+	instrument_maxz = NULL,
+	instrument_specificity = NULL,
+	instrument_specificity_summary = NULL,
 
-
-
-  # Methods
-
-  initialize = function(exposure_ids, outcome_ids, pops=NULL, bfiles=NULL, plink=NULL)
-  {
-  	self$exposure_ids <- exposure_ids
-  	self$outcome_ids <- outcome_ids
-  	self$pops <- pops
-  	self$bfiles <- bfiles
-  	self$plink <- plink
-  },
-
-  # e.g. could just use mv_extract_exposures
-  # - for each exposure_id it identifies the instruments
-  # - then it tries to make these independent
-  # - then looks up the same set of instruments in all exposures
-  extract_instruments = function(exposure_ids=self$exposure_ids, ...) {
-  	self$raw_instruments <- mv_extract_exposures(exposure_ids, ...)
-  },
-
-  # Here the idea is that pop1 and pop2 might share an instrument, but the tophit for pop1 is not the causal variant
-  # Hence, in pop1 it is in LD with the causal variant but not in pop2
-  # So we extract a region around each instrument (e.g. 50kb)
-  # Search for a SNP that is best associated in both pop1 and pop2
-  extract_instrument_regions = function(raw_instruments=self$raw_instruments, bfiles=self$bfiles, )
-  {
-	
-	ldflag <- !(is.null(bfiles) & is.null(pops))
-
-	if(!is.null(bfiles))
-	{
-		stopifnot(length(bfiles) == length(ids))
-	}
-	if(!is.null(pops))
-	{
-		stopifnot(length(pops) == length(ids))
-	}
-	r <- paste0(chr, ":", max(0, position-radius), "-", position+radius)
-	message("Analysing ", r)
-
-	a <- lapply(1:length(ids), function(i)
-	{
-		message("Extracting summary data and LD for ", ids[i])
-		a1 <- ieugwasr::associations(r, ids[i]) %>%
-			dplyr::arrange(position) %>%
-			dplyr::filter(!duplicated(rsid)) %>%
-			gwasglue::ieugwasr_to_TwoSampleMR(.)
-		if(ldflag)
+	# for convenience can migrate the results from a previous MultiAncestrySummarySet into this one
+	import = function(x) {
+		nom <- names(self)
+		for(i in nom)
 		{
-			a1 <- TwoSampleMR::harmonise_ld_dat(a1, suppressMessages(suppressWarnings(ieugwasr::ld_matrix(a1$SNP, pop=pops[i], plink=plink, bfile=bfiles[i], with_alleles=TRUE))))
-			return(a1)
-		} else {
-			return(list(x=a1))
+			if(! i %in% c(".__enclos_env__", "clone") & is.null(self[[i]]))
+			{
+				self[[i]] <- x[[i]]
+			}
 		}
-	})
+	},
 
-	snps <- Reduce(intersect, lapply(a, function(x) x$x$SNP))
-	a <- lapply(a, function(x)
+	# Methods
+
+	initialize = function(exposure_ids=NULL, outcome_ids=NULL, pops=NULL, bfiles=NULL, plink=NULL, radius=NULL, clump_pop=NULL, x=NULL)
 	{
-		index1 <- which(x$x$SNP %in% snps)
-		x$x <- x$x[index1,]
-		if(ldflag)
+		if(!is.null(x))
 		{
-			x$ld <- x$ld[index1, index1]
+			import(x)
 		}
-		return(x)
-	})
-	if(length(ids) > 1)
-	{
-		stopifnot(all(a[[1]]$x$SNP == a[[2]]$x$SNP))
-	}
-	return(a)  	
-  },
+		self$exposure_ids <- exposure_ids
+		self$outcome_ids <- outcome_ids
+		self$pops <- pops
+		self$bfiles <- bfiles
+		self$plink <- plink
+		self$radius <- radius
+		self$clump_pop <- clump_pop
+	},
 
-  # to build on extract_instrument_regions we can do finemapping
-  # If we want to do fine mapping we need to get an LD matrix for the whole region (for each population)
-  # We then need to harmonise the LD matrix to the summary data, and the summary datasets to each other
-  regional_ld_matrices = function(),
+	# e.g. could just use mv_extract_exposures
+	# - for each exposure_id it identifies the instruments
+	# - then it tries to make these independent
+	# - then looks up the same set of instruments in all exposures
+	extract_instruments = function(exposure_ids=self$exposure_ids, ...) 
+	{
+		# Use MVMR method to do the initial extraction
+		# It gets the tophits in each exposure
+		# Then randomly chooses one SNP per region to keep using clumping
+		self$instrument_raw <- mv_extract_exposures(exposure_ids, ...)
+
+		# Add chromosome and position
+		self$instrument_raw <- ieugwasr::variants_rsid(unique(self$instrument_raw$SNP)) %>%
+		dplyr::select(SNP=query, chr, position=pos) %>%
+		inner_join(., self$instrument_raw, by="SNP") %>%
+		dplyr::arrange(id.exposure, chr, position)
+
+		# Arrange to be in order of exposure_ids
+		# Rename columns
+		self$instrument_raw <- lapply(self$exposure_ids, function(id) {
+		subset(self$instrument_raw, id.exposure==id)
+		}) %>% 
+		dplyr::bind_rows() %>%
+		dplyr::select(rsid=SNP, chr, position, id=id.exposure, beta=beta.exposure, se=se.exposure, p=pval.exposure, ea=effect_allele.exposure, nea=other_allele.exposure, eaf=eaf.exposure)
+	},
+
+	# Here the idea is that pop1 and pop2 might share an instrument, but the tophit for pop1 is not the causal variant
+	# Hence, in pop1 it is in LD with the causal variant but not in pop2
+	# So we extract a region around each instrument (e.g. 50kb)
+	# Search for a SNP that is best associated in both pop1 and pop2
+	extract_instrument_regions = function(radius=self$radius, instrument_raw=self$instrument_raw, exposure_ids=self$exposure_ids)
+	{
+		# return a list of lists e.g.
+		# region1:
+			# pop1:
+				# data frame
+		# pop2:
+			# data frame
+
+		# create list of regions in chr:pos format
+		regions <- unique(paste0(instrument_raw$chr, ":", instrument_raw$position-radius, "-", instrument_raw$position+radius))
+
+		# Lookup each region in each exposure
+		self$instrument_regions <- lapply(regions, function(r) {
+			message(r)
+			a <- lapply(self$exposure_ids, function(id) {
+				message(id)
+				ieugwasr::associations(r, id) %>%
+				dplyr::arrange(position) %>%
+				dplyr::filter(!duplicated(rsid))
+			})
+
+			# subset to keep only the same SNPs across datasets
+			# Make sure they have the same effect and other alleles
+			rsids <- Reduce(intersect, lapply(a, function(x) x$rsid))
+			a <- lapply(a, function(x) {
+				subset(x, rsid %in% rsids)
+			})
+
+			# check effect and other alleles are the same
+			ea <- a[[1]]$ea
+			a <- lapply(a, function(x) {
+				index <- x$ea != ea
+				if(sum(index) > 0)
+				{
+					x$beta[index] <- x$beta[index] * -1
+					nea <- x$nea[index]
+					x$nea[index] <- x$ea[index]
+					x$ea[index] <- x$nea[index]
+					x$eaf[index] <- 1-x$eaf[index]
+					x <- subset(x, nea == a[[1]]$nea)
+				}
+				return(x)
+			})
+			rsids <- Reduce(intersect, lapply(a, function(x) x$rsid))
+			a <- lapply(a, function(x) {
+				subset(x, rsid %in% rsids) %>%
+				dplyr::arrange(chr, position)
+			})
+			names(a) <- self$exposure_ids
+			return(a)
+		})
+		names(self$instrument_regions) <- unique(instrument_raw$rsid)
+	},
+
+
+	# Once a set of instruments is chosen we can ask
+	# - what fraction of those primarily identified in pop1 replicate in pop2?
+	# - what fraction of those primarily identified in pop1 have the same sign as in pop2?
+	# - compare these to what is expected by chance under the hypothesis that the effect estimates are the same
+	# this will provide some evidence for whether lack of replication is due to (e.g.) GxE
+	estimate_instrument_specificity = function(instrument, alpha="bonferroni")
+	{
+		if(alpha=="bonferroni")
+		{
+			alpha <- 0.05/nrow(instrument)
+		}
+		o <- lapply(self$exposure_ids, function(i)
+		{
+			m <- subset(instrument, id == i & p < 5e-8)
+			other_ids <- self$exposure_ids[!self$exposure_ids %in% i]
+			o <- lapply(other_ids, function(j)
+			{
+				n <- subset(instrument, id == j & rsid %in% m$rsid)
+				o <- n %>%
+					{self$prop_overlap(m$beta, .$beta, m$se, .$se, alpha)}
+				o$res <- o$res %>%
+					dplyr::mutate(discovery=i, replication=j) %>%
+					dplyr::select(discovery, replication, dplyr::everything())
+				o$variants <- o$variants %>%
+					dplyr::mutate(
+						discovery=i, 
+						replication=j, 
+						rsid=n$rsid, 
+						p=n$p, 
+						distinct=sig > 0.8 & p > 0.1
+					) %>%
+					dplyr::select(discovery, replication, dplyr::everything())
+				return(o)
+			})
+			overall <- lapply(o, function(x) { x$res }) %>% bind_rows()
+			pervariant <- lapply(o, function(x) { x$variants }) %>% bind_rows()
+			return(list(overall=overall, pervariant=pervariant))
+		})
+		self$instrument_specificity_summary <- lapply(o, function(x) x$overall) %>% bind_rows()
+		self$instrument_specificity <- lapply(o, function(x) x$pervariant) %>% bind_rows()
+		return(self$instrument_specificity_summary)
+	},
+
+
+	prop_overlap = function(b_disc, b_rep, se_disc, se_rep, alpha)
+	{
+		p_sign <- pnorm(-abs(b_disc) / se_disc) * pnorm(-abs(b_disc) / se_rep) + ((1 - pnorm(-abs(b_disc) / se_disc)) * (1 - pnorm(-abs(b_disc) / se_rep)))
+		p_sig <- pnorm(-abs(b_disc) / se_disc + qnorm(alpha / 2)) + (1 - pnorm(-abs(b_disc) / se_disc - qnorm(alpha / 2)))
+		p_rep <- pnorm(abs(b_rep)/se_rep, lower.tail=FALSE)
+		res <- dplyr::tibble(
+			nsnp=length(b_disc),
+			metric=c("Sign", "Sign", "P-value", "P-value"),
+			datum=c("Expected", "Observed", "Expected", "Observed"),
+			value=c(sum(p_sign, na.rm=TRUE), sum(sign(b_disc) == sign(b_rep)), sum(p_sig, na.rm=TRUE), sum(p_rep < alpha, na.rm=TRUE))
+		)
+		return(list(res=res, variants=dplyr::tibble(sig=p_sig, sign=p_sign)))
+	},
+
+
+
+	scan_regional_instruments = function(instrument_raw=self$instrument_raw, instrument_regions=self$instrument_regions)
+	{
+		# Simple method to choose the best SNP in the region by 
+		# - normalising the Z scores for each trait (to be in range -1 to 1)
+		# - adding the z scores together across traits
+		# - choosing the largest abs(z) across all traits
+
+		temp <- lapply(self$instrument_regions, function(r) {
+			lapply(r, function(id) {
+				id$beta / id$se
+			}) %>% bind_cols()
+		})
+		z <- lapply(temp, function(x)
+		{
+			apply(x, 2, function(y) y/max(abs(y))) %>%
+			rowSums()
+		})
+		self$instrument_region_zscores <- lapply(1:length(temp), function(i)
+		{
+			temp[[i]] %>%
+				dplyr::mutate(
+					zsum = z[[i]],
+					rsid = self$instrument_regions[[i]][[1]]$rsid,
+					chr = self$instrument_regions[[i]][[1]]$chr,
+					position = self$instrument_regions[[i]][[1]]$position,
+				)
+		})
+		names(self$instrument_region_zscores) <- names(self$instrument_regions)
+		self$instrument_maxz <- names(self$instrument_region_zscores) %>%
+			lapply(., function(r) {
+				o <- self$instrument_region_zscores[[r]] %>%
+					dplyr::arrange(desc(abs(zsum))) %>%
+					dplyr::slice(1) %>%
+					dplyr::mutate(original=r)
+				self$instrument_regions[[r]] %>%
+					lapply(., function(id){
+						subset(id, rsid == o$rsid) %>%
+						dplyr::mutate(original_rsid = r, zsum=o$zsum)
+					}) %>% bind_rows()
+			}) %>% 
+			dplyr::bind_rows() %>%
+			dplyr::arrange(id, chr, position)
+			self$instrument_maxz <- lapply(self$exposure_ids, function(i)
+			{
+				subset(self$instrument_maxz, id == i)
+			}) %>% bind_rows()
+
+	},
+
+
+	plot_regional_instruments = function(region=1:min(10, nrow(instruments)), instrument_region_zscores=self$instrument_region_zscores, instruments=self$instrument_raw)
+	{
+		a <- instrument_region_zscores[region]
+		a <- names(a) %>% lapply(., function(n)
+		{
+			o <- bind_rows(a[[n]])
+			o$original_rsid <- n
+			return(o)
+		}) %>% bind_rows()
+		colnum <- which(names(a) == "zsum")
+		nom <- names(a)[1:colnum]
+		a <- tidyr::pivot_longer(a, nom)
+		a$selected <- a$rsid %in% instruments$rsid
+		ggplot(a, aes(x=position, y=value)) +
+		geom_point(aes(colour=name)) +
+		geom_point(data=subset(a, selected), , colour="black") +
+		facet_grid(name ~ original_rsid, scale="free")
+	},
+
+
+	# to build on extract_instrument_regions we can do finemapping
+	# If we want to do fine mapping we need to get an LD matrix for the whole region (for each population)
+	# We then need to harmonise the LD matrix to the summary data, and the summary datasets to each other
+	regional_ld_matrices = function(instrument_regions=self$instrument_regions, bfiles=self$bfiles, pops=self$pops, plink=self$plink)
+	{
+
+		if(!is.null(bfiles))
+		{
+			stopifnot(length(bfiles) == length(self$exposure_ids))
+		}
+		if(!is.null(pops))
+		{
+			stopifnot(length(pops) == length(self$exposure_ids))
+		}
+
+		regions <- names(instrument_regions)
+		self$ld_matrices <- lapply(regions, function(r)
+		{
+			d <- instrument_regions[[r]]
+			o <- lapply(1:length(self$exposure_ids), function(i)
+			{
+				ld <- ieugwasr::ld_matrix(d[[self$exposure_ids[i]]]$rsid, pop=self$pops[i], bfile=self$bfiles[i], plink=self$plink, with_alleles=TRUE)
+				code1 <- paste0(d[[self$exposure_ids[i]]]$rsid, "_", d[[self$exposure_ids[i]]]$ea, "_", d[[self$exposure_ids[i]]]$nea)
+				code2 <- paste0(d[[self$exposure_ids[i]]]$rsid, "_", d[[self$exposure_ids[i]]]$ea, "_", d[[self$exposure_ids[i]]]$nea)
+				rem_index <- ! (code1 %in% colnames(ld) | code2 %in% colnames(ld))
+				flip_index <- ! colnames(ld) %in% code1
+				if(any(rem_index))
+				{
+					rem <- d[[self$exposure_ids[i]]]$rsid[rem_index]
+				}
+				if(any(flip_index))
+				{
+					print("Flipping ", sum(flip_index))
+					ld[flip_index, ] <- ld[flip_index, ] * -1
+					ld[, flip_index] <- ld[, flip_index] * -1
+				}
+				return(list(ld=ld, rem=rem))
+			})
+			rem <- lapply(o, function(x) x$rem) %>% unlist() %>% unique()
+			o <- lapply(o, function(x) x$ld)
+			names(o) <- self$exposure_ids
+			for(i in self$exposure_ids)
+			{
+				self$instrument_regions[[r]][[i]]$ld_unavailable <- self$instrument_regions[[r]][[i]]$rsid %in% rem
+			}
+			o <- lapply(o, function(ld)
+			{
+				rs <- strsplit(colnames(ld), "_") %>% sapply(., function(x) x[1])
+				ld[! rs %in% rem, ! rs %in% rem]
+			})
+			return(o)
+		})
+		names(self$ld_matrices) <- regions
+	},
 
   # for each instrument region + ld matrix we can perform susie finemapping
   # do this independently in each population
   # find credible sets that overlap - to try to determine the best SNP in a region to be used as instrument
-  susie_finemap_regions = function(),
+  susie_finemap_regions = function() {},
 
   # PAINTOR allows finemapping jointly across multiple populations
   # returns a posterior probability of inclusion for each SNP
   # Choose the variant with highest posterior probability and associations in each exposure
-  paintor_finemap_regions = function(),
+  paintor_finemap_regions = function() {},
 
-  # Once a set of instruments is chosen we can ask
-  # - what fraction of those primarily identified in pop1 replicate in pop2?
-  # - what fraction of those primarily identified in pop1 have the same sign as in pop2?
-  # - compare these to what is expected by chance under the hypothesis that the effect estimates are the same
-  # this will provide some evidence for whether lack of replication is due to (e.g.) GxE
-  proportion_instrument_overlap = function(b_disc, b_rep, se_disc, se_rep, alpha)
-  {
-	p_sign <- pnorm(-abs(b_disc) / se_disc) * pnorm(-abs(b_disc) / se_rep) + ((1 - pnorm(-abs(b_disc) / se_disc)) * (1 - pnorm(-abs(b_disc) / se_rep)))
-	p_sig <- pnorm(-abs(b_disc) / se_disc + qnorm(alpha / 2)) + (1 - pnorm(-abs(b_disc) / se_disc - qnorm(alpha / 2)))
-	p_rep <- pnorm(abs(b_rep)/se_rep, lower.tail=FALSE)
-	message("Total: ", length(b_disc))
-	message("Expected sign: ", sum(p_sign, na.rm=TRUE))
-	message("Observed sign: ", sum(sign(b_disc) == sign(b_rep)))
-	message("Expected sig: ", sum(p_sig, na.rm=TRUE))
-	message("Observed sig: ", sum(p_rep < alpha, na.rm=TRUE))
-	return(list(sum(p_sign, na.rm=TRUE), sum(p_sig, na.rm=TRUE), data_frame(sig=p_sig, sign=p_sign)))
-  },
 
   # Once a set of instruments is defined then extract the outcome data
   # Could use 
@@ -133,10 +343,10 @@ MultiAncestrySummarySet <- R6::R6Class("MultiAncestrySummarySet", list(
   # - maximised associations from extract_instrument_regions
   # - finemapped hits from susie_finemap_regions
   # - finemapped hits from paintor_finemap_regions
-  extract_outcome_data = function(),
+  extract_outcome_data = function() {},
 
   # Perform basic SEM analysis of the joint estimates in multiple ancestries
-  perform_basic_sem = function()
+  perform_basic_sem = function() {}
 
 
   # Plots
@@ -209,63 +419,7 @@ greedy_remove <- function(r, thresh)
   return(which(nom %in% rem))
 }
 
-independent_instruments <- function(id1, id2, alpha=0.05, method="fdr", ld_thresh=0.05, bfile=NULL, plink=NULL, ld_pop="EUR")
-{
-	message("Tophits for ", id1)
-	p1th <- tophits(id1)
-	message("Tophits for ", id2)
-	p2th <- tophits(id2)
-	message("Looking up reciprocal associations")
-	lu <- dplyr::bind_rows(
-		associations(p2th$rsid, id1) %>%
-			dplyr::select(rsid, chr, position, ea, nea, id, beta, se, p),
-		associations(p1th$rsid, id2) %>%
-			dplyr::select(rsid, chr, position, ea, nea, id, beta, se, p)
-	)
-	lu$pvaladjust <- p.adjust(lu$p, method)
-	rsid <- unique(lu$rsid)
-	message("Found ", length(rsid), " unique variants")
-	message("LD pruning")
-	ld <- suppressMessages(suppressWarnings(ieugwasr::ld_matrix(rsid, pop=ld_pop, bfile=bfile, plink=plink)))
-	ldnom <- rownames(ld) %>% strsplit(., split="_") %>% sapply(., function(x) x[1])
-	rem <- greedy_remove(ld, sqrt(ld_thresh))
-	to_remove <- ldnom[rem] %>% strsplit(., split="_") %>% sapply(., function(x) x[1])
-	to_remove <- c(to_remove, rsid[!rsid %in% ldnom])
-	message("Removing ", length(to_remove), " due to LD or absence from reference")
-	lu <- subset(lu, !rsid %in% to_remove) %>%
-		mutate(sig = pvaladjust < alpha)
-	message(nrow(lu), " variants remain")
-
-	# shared_snps <- subset(lu, sig)
-	# unique_snps1 <- subset(lu, p > 0.05 & id == id2)
-	# unique_snps2 <- subset(lu, p > 0.05 & id == id1)
-	return(lu)
-}
-
-trans_mr_instruments <- function(id1, id2, radius, pop1=NULL, pop2=NULL, plink=NULL, bfile1=NULL, bfile2=NULL, ld_thresh=0.05, alpha=0.05, mt_method="fdr", prune_bfile=NULL, prune_pop=NULL)
-{
-	lu <- independent_instruments(id1, id2, alpha, mt_method, ld_thresh, prune_bfile, plink, prune_pop)
-	l <- list()
-	for(i in 1:nrow(lu))
-	{
-		message(lu$chr[i], ":", lu$position[i])
-		l[[i]] <- finemap_region(chr=lu$chr[i], position=lu$position[i], radius=radius, id1=id1, id2=id2, plink=plink, bfile1=bfile1, bfile2=bfile2, pop1=pop1, pop2=pop2)
-	}
-
-	res <- lapply(l, function(x)
-	{
-		tibble(
-			type=ifelse(is.null(x$type), NA, x$type), 
-			bestsnp=ifelse(is.null(x$bestsnp), NA, x$bestsnp), 
-			cs_overlap=ifelse(is.null(x$cs_overlap), NA, x$cs_overlap)
-		)
-	}) %>% bind_rows()
-
-	inst <- extract_outcome_data(subset(res, !is.na(bestsnp))$bestsnp, c(id1, id2)) %>% convert_outcome_to_exposure()
-	return(list(inst=inst, res=res, info=l))
-}
-
-finemap_region <- function(chr, position, radius, id1, id2, plink=NULL, bfile1=NULL, bfile2=NULL, pop1=NULL, pop2=NULL)
+susie_finemap_region <- function(chr, position, radius, id1, id2, plink=NULL, bfile1=NULL, bfile2=NULL, pop1=NULL, pop2=NULL)
 {
 	r <- paste0(chr, ":", max(0, position-radius), "-", position+radius)
 	message("Analysing ", r)
