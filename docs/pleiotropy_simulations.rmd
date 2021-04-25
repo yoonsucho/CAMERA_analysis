@@ -3,12 +3,435 @@ title: "Pleiotropy simulations"
 output: html_notebook
 ---
 
+```{r}
+library(simulateGP)
+library(tidyverse)
+library(lavaan)
+library(RadialMR)
+library(pbapply)
+library(TwoSampleMR)
+library(pROC)
+```
+
+
+# Basic simulation setup
+
+This function does the following
+
+1. For each population make a genetic map for all instruments - independent allele frequencies per SNP and population
+2. Generate SNP-exposure effects for pop 1 based on h2 and S
+3. Transfer the same SNP-exposure effects to pop 2 (the h2 might be different because the allele frequencies are independent)
+4. Create SNP-outcome effects for pop1 and pop2 given the causal effects `biv1` and `biv2` and the horizontal pleiotropic effects `pl1` and `pl2`
+5. Generate genetic summary data for exposure and outcome traits for pop1 and pop2 given sample sizes `nid1x`, `nid2x`, `nid1y` and `nid2y`
+6. Estimate causal relationships in each population using
+  - IVW for each pop
+  - Radial MR for each pop
+  - `UnweightedSEMa` = SEM where biv1=biv2
+  - `UnweightedSEMb` = SEM where biv1 and biv2 can vary
+  - `RadialSEMa` = SEM in a radialMR framework, e.g. allowing it to be weighted, where biv1=biv2
+  - `RadialSEMb` = SEM in a radialMR framework, e.g. allowing it to be weighted, where biv1 and biv2 can vary
 
 ```{r}
+sim1 <- function(nsnp, nid1x, nid2x, nid1y, nid2y, h2, S, biv1, biv2, pl1, pl2, absx)
+{
+	# Create map of variants
+	map1 <- tibble(snp=1:nsnp, af=runif(nsnp, 0.05, 0.95))
+	map2 <- tibble(snp=1:nsnp, af=runif(nsnp, 0.05, 0.95))
 
-### Introducing pleiotropy
+	# Create SNP-exposure effects
+	x1 <- generate_gwas_params(map1, h2=h2, Pi=1, S=S)
+	if(absx)
+	{
+		x1$beta <- abs(x1$beta)
+	}
+	x2 <- map2
+	x2$beta <- x1$beta
+
+	# Create SNP-outcome effects
+	y1 <- x1
+	y1$beta <- y1$beta * biv1 + pl1
+	y2 <- x2
+	y2$beta <- y2$beta * biv2 + pl2
+
+	x1s <- generate_gwas_ss(x1, nid=nid1x)
+	x2s <- generate_gwas_ss(x2, nid=nid2x)
+	y1s <- generate_gwas_ss(y1, nid=nid1y)
+	y2s <- generate_gwas_ss(y2, nid=nid2y)
+
+	dat <- tibble(
+		y1 = y1s$bhat,
+		y2 = y2s$bhat,
+		x1 = x1s$bhat,
+		x2 = x2s$bhat,
+		yse1 = y1s$se,
+		yse2 = y2s$se,
+		xse1 = x1s$se,
+		xse2 = x2s$se,
+		r1 = y1/x1,
+		r2 = y2/x2,
+		w1 = sqrt(x1^2 / yse1^2),
+		w2 = sqrt(x2^2 / yse2^2),
+		o1 = r1 * w1,
+		o2 = r2 * w2
+	)
+
+	out <- list()
+	out$ivw1 <- TwoSampleMR::mr_ivw(dat$x1, dat$y1, dat$xse1, dat$yse1) %>%
+	  {tibble(model="IVW", pop=1, bivhat=.$b, se=.$se, pval=.$pval)}
+	out$ivw2 <- TwoSampleMR::mr_ivw(dat$x2, dat$y2, dat$xse2, dat$yse2) %>%
+	  {tibble(model="IVW", pop=2, bivhat=.$b, se=.$se, pval=.$pval)}
+	out$rm1 <- summary(lm(o1 ~ -1 + w1, data=dat)) %>%
+	  {tibble(model="RadialIVW", pop=1, bivhat=.$coef[1,1], se=.$coef[1,2], pval=.$coef[1,4])}
+	out$rm2 <- summary(lm(o2 ~ -1 + w2, data=dat)) %>%
+	  {tibble(model="RadialIVW", pop=2, bivhat=.$coef[1,1], se=.$coef[1,2], pval=.$coef[1,4])}
+
+	
+	runsem <- function(model, data, modname)
+	{
+	  mod <- sem(model, data=data)
+	  invisible(capture.output(mod <- summary(mod, fit.measures=TRUE)))
+	  tibble(
+	    model=modname,
+	    pop=1:2,
+	    bivhat=mod$PE$est[1:2],
+	    se=mod$PE$se[1:2],
+	    pval=mod$PE$pvalue[1:2],
+	    aic=mod$FIT['aic']
+	  )
+	}
+
+	out$semA <- runsem('
+	y1 ~ biv*x1
+	y2 ~ biv*x2
+	', dat, "UnweightedSEMa")
+
+	out$semB <- runsem('
+	y1 ~ biv_1*x1
+	y2 ~ biv_2*x2
+	', dat, "UnweightedSEMb")
+	
+	out$modC <- runsem('
+	o1 ~ biv*w1
+	o2 ~ biv*w2
+	', dat, "RadialSEMa")
+	
+	out$modD <- runsem('
+	o1 ~ biv_1*w1
+	o2 ~ biv_2*w2
+	', dat, "RadialSEMb")
+
+  compare_est <- function(y, s)
+  {
+    k <- length(y)
+    w <- 1/s^2
+    sum.w <- sum(w)
+    mu.hat <- sum(y * w)/sum.w
+    Q <- sum(w * (y - mu.hat)^2)
+    return(Q)
+  }
+
+	res <- out %>% bind_rows()
+	
+	m1 <- lapply(c("IVW", "RadialIVW"), function(x)
+	{
+	  subset(res, model==x) %>%
+	    {
+	      compare_est(.$bivhat[1:2], .$se[1:2])
+	    } %>%
+	    {tibble(model=x, stat=.)}
+	}) %>% bind_rows()
+
+	m2 <- tibble(model="RadialSEM", stat=subset(res, model=="RadialSEMa" & pop==1)$aic - subset(res, model=="RadialSEMb" & pop==1)$aic)
+	m3 <- tibble(model="UnweightedSEM", stat=subset(res, model=="UnweightedSEMa" & pop==1)$aic - subset(res, model=="UnweightedSEMb" & pop==1)$aic)
+		
+	popdiff <- bind_rows(m1, m2, m3)
+		
+	return(list(dat=dat, res=res, popdiff=popdiff))
+}
+```
 
 
+Example simulation
+
+```{r}
+out <- sim1(
+  nsnp=100,
+  nid1x=10000,
+  nid2x=10000,
+  nid1y=10000,
+  nid2y=10000,
+  h2=0.3,
+  S=0,
+  biv1=0.2,
+  biv2=0.2,
+  pl1=0,
+  pl2=0,
+  absx=FALSE
+)
+```
+
+What does the data look like:
+
+```{r}
+out$dat %>%
+  {bind_rows(
+    tibble(pop=1, x=.$x1, y=.$y1),
+    tibble(pop=2, x=.$x2, y=.$y2)
+  )} %>%
+  ggplot(., aes(x=x, y=y)) +
+    geom_point() +
+    geom_smooth(method=lm) +
+    facet_grid(. ~ pop)
+```
+i.e. no directional pleiotropy (slope passes through origin). Estimates:
+
+```{r}
+out$res
+```
+
+Run a few sims
+
+```{r}
+o <- pblapply(1:100, function(i)
+{
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=0.2,
+    biv2=0.2,
+    pl1=0,
+    pl2=0,
+    absx=FALSE
+  ) %>%
+    {.$res} %>%
+    mutate(sim=i)
+}) %>% bind_rows()
+```
+
+```{r}
+o %>% 
+  group_by(model, pop) %>%
+  summarise(bivhat=mean(bivhat), se=mean(se))
+
+o %>%
+  ggplot(., aes(x=model, y=bivhat)) +
+  geom_hline(yintercept=0.2) +
+  geom_boxplot(aes(fill=as.factor(pop)))
+```
+Summary:
+
+- Everything works as expected (returning estimates ~ 0.2)
+- UnweightedSEMa has better precision because it is jointly estimating biv from two independent datasets - power has improved
+- Need to note that unweighted MR / SEM will be unstable if allele frequencies are very small
+
+ToDo: 
+
+- Create IVW estimate combining pop1 and pop2 to compare against UnweightedSEMa
+
+## Introducing pleiotropy
+
+```{r}
+out <- sim1(
+  nsnp=100,
+  nid1x=10000,
+  nid2x=10000,
+  nid1y=10000,
+  nid2y=10000,
+  h2=0.3,
+  S=0,
+  biv1=0.2,
+  biv2=0.2,
+  pl1=0.2,
+  pl2=0.2,
+  absx=TRUE
+)
+```
+
+
+```{r}
+out$dat %>%
+  {bind_rows(
+    tibble(pop=1, x=.$x1, y=.$y1),
+    tibble(pop=2, x=.$x2, y=.$y2)
+  )} %>%
+  ggplot(., aes(x=x, y=y)) +
+    geom_point() +
+    geom_smooth(method=lm) +
+    facet_grid(. ~ pop)
+```
+
+Intercept is now through 0.2 instead of 0 - directional pleiotropy
+
+```{r}
+out$res
+```
+Somewhat unexpected that unweighted SEM is actually unbiased?!
+
+Run a few more times
+
+```{r}
+op <- pblapply(1:100, function(i)
+{
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=0.2,
+    biv2=0.2,
+    pl1=0.2,
+    pl2=0.2,
+    absx=TRUE
+  ) %>%
+    {.$res} %>%
+    mutate(sim=i)
+}) %>% bind_rows()
+```
+
+
+
+```{r}
+op %>% 
+  group_by(model, pop) %>%
+  summarise(bivhat=mean(bivhat), se=mean(se))
+
+op %>%
+  ggplot(., aes(x=model, y=bivhat)) +
+  geom_hline(yintercept=0.2) +
+  geom_boxplot(aes(fill=as.factor(pop)))
+```
+
+Summary
+
+- The unweightedSEM method handles directional pleiotropy automatically
+
+
+## Population-specific effects
+
+Simulate where the effect is either null in both populations or $b_{pop} \sim N(0, 0.1)$. For IVW and RadialIVW the comparison is made using Cochran's Q test for heterogeneity, to determine if the population 1 and population 2 estimates are non-overlapping. For the SEM methods it is tested using the difference in AIC measures of fit.
+
+```{r}
+od <- pblapply(1:500, function(i)
+{
+  biv1=sample(c(0, rnorm(1, sd=0.1)), 1)
+  biv2=sample(c(0, rnorm(1, sd=0.1)), 1)
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=biv1,
+    biv2=biv2,
+    pl1=0,
+    pl2=0,
+    absx=FALSE
+  ) %>%
+    {.$popdiff} %>%
+    mutate(sim=i, biv1=biv1, biv2=biv2)
+}) %>% bind_rows()
+```
+
+How well does the difference statistic for each method discriminate between cases where the causal effects are the same or different?
+
+```{r}
+od %>%
+  mutate(same=as.numeric(biv1==biv2)) %>%
+  group_by(model) %>%
+  summarise(o=as.numeric(auc(response=same, predictor=stat)))
+```
+Comparison across methods
+
+```{r}
+od %>%
+  subset(., biv1 != biv2) %>%
+  dplyr::select(model, stat, sim) %>%
+  pivot_wider(id_cols=c(sim, model), names_from=model, values_from=stat) %>%
+  select(-sim) %>%
+  pairs()
+```
+Comparison by effect size difference
+
+```{r}
+od %>%
+  mutate(diff=abs(biv1-biv2)) %>%
+  ggplot(., aes(x=diff, y=stat)) +
+    geom_point() +
+    facet_grid(model ~ .)
+```
+
+Use p-value of 0.05 for Q stat to declare significantly different. What should be used for AIC?
+
+```{r}
+aic_thresh <- od %>%
+  subset(., biv1==biv2 & model == "UnweightedSEM") %>%
+  summarise(t=quantile(stat, 0.95)) %>%
+  {.$t}
+aic_thresh
+```
+
+```{r}
+od <- od %>%
+  mutate(same=biv1==biv2, sig=case_when(
+    model %in% c("IVW", "RadialIVW") ~ pchisq(stat, df=1, low=FALSE) < 0.05,
+    model %in% c("UnweightedSEM", "RadialSEM") ~ stat > aic_thresh
+  ))
+
+
+od %>%
+  filter(same) %>%
+  group_by(model) %>%
+  summarise(fdr=sum(sig)/n())
+
+od %>%
+  filter(!same) %>%
+  group_by(model) %>%
+  summarise(power=sum(sig)/n())
+```
+
+```{r}
+od %>%
+  filter(biv1 != biv2) %>%
+  ggplot(., aes(x=abs(biv1-biv2), y=as.numeric(sig))) +
+  geom_point(aes(colour=model)) +
+  geom_smooth(aes(colour=model), se=FALSE) +
+  scale_colour_brewer(type="qual") +
+  labs(x="Difference in effect on pop1 and pop2", y="Difference detected")
+```
+
+Summary
+
+- The UnweightedSEM method, IVW and RadialIVW methods seem to perform comparably
+
+Todo:
+
+- Power of test statistic when effect sizes are different
+- Power to detect when SNP-exposure effects are different
+- LD-aware simulations: how well can we discriminate between distinct causal variants vs false negatives due to power?
+
+
+---
+
+# Older stuff
+
+
+## Further analysis of population specific estimates
+
+```{r}
+param <- expand.grid(
+  
+)
+```
 
 
 ```{r}
