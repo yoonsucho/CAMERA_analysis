@@ -22,7 +22,10 @@ param <- expand.grid(
   pshared + pdistinct + p1 == 1
 )
 
-o4 <- mclapply(1:nrow(param), function(i)
+o <- mclapply(1:nrow(param), function(i)
   {
+    message(i, " of ", nrow(param))
     do.call(sim, args=param[i,])
-  }) %>% bind_rows()
+  }, mc.cores=16) %>% bind_rows()
+
+save(o, file=here("results", "instrument_specificity.rdata"))
