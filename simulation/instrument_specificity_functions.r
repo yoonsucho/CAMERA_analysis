@@ -1,6 +1,7 @@
 library(parallel)
 library(tidyverse)
 library(simulateGP)
+library(pROC)
 
 prop_overlap = function(b_disc, b_rep, se_disc, se_rep, alpha)
 {

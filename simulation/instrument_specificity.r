@@ -25,7 +25,7 @@ param <- expand.grid(
 o <- mclapply(1:nrow(param), function(i)
   {
     message(i, " of ", nrow(param))
-    do.call(sim, args=param[i,])
+    tryCatch(do.call(sim, args=param[i,]), error=function(e) return(NULL))
   }, mc.cores=16) %>% bind_rows()
 
 save(o, file=here("results", "instrument_specificity.rdata"))
