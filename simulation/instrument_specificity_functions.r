@@ -2,6 +2,7 @@ library(parallel)
 library(tidyverse)
 library(simulateGP)
 library(pROC)
+library(pbapply)
 
 prop_overlap = function(b_disc, b_rep, se_disc, se_rep, alpha)
 {
@@ -91,16 +92,22 @@ plot_simss <- function(s)
 }
 
 
-sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct, p1, hsq1=0.004, window=250000, winnerscurse=TRUE, sim=1, mc.cores=1)
+sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct, p1, hsq1=0.4, window=250000, winnerscurse=TRUE, removecv=TRUE, sim=1, mc.cores=1)
 {
   type <- sample(c("shared", "distinct", "1"), nsim, replace=T, prob=c(pshared, pdistinct, p1))
   ld <- organise_ldobj(lddir1, lddir2, region)
-  l <- mclapply(1:nsim, function(i)
+  hsq <- 1:nsim / sum(1:nsim) * hsq1
+  l <- pblapply(1:nsim, function(i)
   {
-    message(i)
-    x <- simss(ld[[1]], ld[[2]], nid1, nid2, type[i], hsq1, window)
+    x <- simss(ld[[1]], ld[[2]], nid1, nid2, type[i], hsq[i], window)
     x1 <- x$x1
     x2 <- x$x2
+    if(removecv)
+    {
+      cv <- which(x1$beta != 0)
+      x1 <- x1[-cv,]
+      x2 <- x2[-cv,]
+    }
     # Get the top hit for 1 and check for overlap in 2
     x1raw <- subset(x1, fval==max(fval, na.rm=T))[1,]
     x2raw <- subset(x2, snp == x1raw$snp)
@@ -121,11 +128,12 @@ sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct
     } else {
       omaxz <- prop_overlap(rnorm(nrow(x1maxz), x1maxz$beta, x1maxz$se), x2maxz$bhat, x2maxz$se, x2maxz$se, 0.05/nsim)
     }
-    return(list(raw=oraw, maxz=omaxz))
-  }, mc.cores=mc.cores)
+    return(list(raw=oraw, maxz=omaxz, th1=x1raw$snp, th2=x1maxz$snp))
+  }, cl=mc.cores)
   
   sig <- which(sapply(l, function(x) !is.null(x)))
   l[sapply(l, is.null)] <- NULL
+  prop_same <- sapply(l, function(x) x$th1 == x$th2) %>% sum %>% {./length(l)}
   o1 <- list(res=l[[1]]$raw$res)
   o1$variants <- lapply(l, function(x)
   {
@@ -174,7 +182,34 @@ sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct
   binom2 = binom.test(x=obs_rep2, n=length(sig), p=exp_rep2/length(sig))
   
   res <- tibble(
-    lddir1=lddir1, lddir2=lddir2, region=region, nid1=nid1, nid2=nid2, pshared=pshared, pdistinct=pdistinct, p1=p1, hsq1=hsq1, window=window, winnerscurse=winnerscurse, nsig=length(sig), auc1=o1$auc, auc2=o2$auc, sim=sim, correct_sig1=sum(o1$variants$correct_sig)/length(o1$variants$correct_sig), correct_sig2=sum(o2$variants$correct_sig)/length(o2$variants$correct_sig), obs_rep1=obs_rep1, obs_rep2=obs_rep2, exp_rep1=exp_rep1, exp_rep2=exp_rep2, binom_p1 = binom1$p.value, binom_p2 = binom2$p.value, fdr1=subset(perf1, !truth)$pow, fdr2=subset(perf2, !truth)$pow, pow1=subset(perf1, truth)$pow, pow2=subset(perf2, truth)$pow
+    lddir1=lddir1,
+    lddir2=lddir2,
+    region=region,
+    nid1=nid1,
+    nid2=nid2,
+    pshared=pshared,
+    pdistinct=pdistinct,
+    p1=p1,
+    hsq1=hsq1,
+    window=window,
+    winnerscurse=winnerscurse,
+    nsig=length(sig),
+    auc1=o1$auc,
+    auc2=o2$auc,
+    sim=sim,
+    correct_sig1=sum(o1$variants$correct_sig)/length(o1$variants$correct_sig),
+    correct_sig2=sum(o2$variants$correct_sig)/length(o2$variants$correct_sig),
+    obs_rep1=obs_rep1,
+    obs_rep2=obs_rep2,
+    exp_rep1=exp_rep1,
+    exp_rep2=exp_rep2,
+    binom_p1 = binom1$p.value,
+    binom_p2 = binom2$p.value,
+    fdr1=subset(perf1, !truth)$pow,
+    fdr2=subset(perf2, !truth)$pow,
+    pow1=subset(perf1, truth)$pow,
+    pow2=subset(perf2, truth)$pow,
+    prop_same=prop_same
   )
   
   return(res)
