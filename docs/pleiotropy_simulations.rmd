@@ -32,7 +32,7 @@ This function does the following
   - `RadialSEMb` = SEM in a radialMR framework, e.g. allowing it to be weighted, where biv1 and biv2 can vary
 
 ```{r}
-sim1 <- function(nsnp, nid1x, nid2x, nid1y, nid2y, h2, S, biv1, biv2, pl1, pl2, absx)
+sim1 <- function(nsnp, nid1x, nid2x, nid1y, nid2y, h2, S, biv1, biv2, pl1, pl2, absx, gx_same=TRUE, instrument_threshold=1, winnerscurse_adjustment=FALSE)
 {
 	# Create map of variants
 	map1 <- tibble(snp=1:nsnp, af=runif(nsnp, 0.05, 0.95))
@@ -45,7 +45,12 @@ sim1 <- function(nsnp, nid1x, nid2x, nid1y, nid2y, h2, S, biv1, biv2, pl1, pl2, 
 		x1$beta <- abs(x1$beta)
 	}
 	x2 <- map2
-	x2$beta <- x1$beta
+	if(gx_same)
+	{
+    x2$beta <- x1$beta
+	} else {
+	  x2 <- generate_gwas_params(map2, h2=h2, Pi=1, S=S)
+	}
 
 	# Create SNP-outcome effects
 	y1 <- x1
@@ -58,6 +63,24 @@ sim1 <- function(nsnp, nid1x, nid2x, nid1y, nid2y, h2, S, biv1, biv2, pl1, pl2, 
 	y1s <- generate_gwas_ss(y1, nid=nid1y)
 	y2s <- generate_gwas_ss(y2, nid=nid2y)
 
+	sig <- x1s$pval < instrument_threshold | x2s$pval < instrument_threshold
+
+	x1s <- x1s[sig,]
+	x2s <- x2s[sig,]
+	y1s <- y1s[sig,]
+	y2s <- y2s[sig,]
+
+	x1 <- x1[sig,]
+	x2 <- x2[sig,]
+	y1 <- y1[sig,]
+	y2 <- y2[sig,]
+	
+	if(winnerscurse_adjustment)
+	{
+	  x1s$bhat <- rnorm(sum(sig), x1$beta, x1s$se)
+	  x2s$bhat <- rnorm(sum(sig), x2$beta, x2s$se)
+	}
+	
 	dat <- tibble(
 		y1 = y1s$bhat,
 		y2 = y2s$bhat,
@@ -233,6 +256,106 @@ ToDo:
 
 - Create IVW estimate combining pop1 and pop2 to compare against UnweightedSEMa
 
+## Try different gx
+
+
+```{r}
+o2 <- pblapply(1:100, function(i)
+{
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=0.2,
+    biv2=0.2,
+    pl1=0,
+    pl2=0,
+    absx=FALSE,
+    gx_same=FALSE
+  ) %>%
+    {.$res} %>%
+    mutate(sim=i)
+}) %>% bind_rows()
+```
+
+```{r}
+o2 %>% 
+  group_by(model, pop) %>%
+  summarise(bivhat=mean(bivhat), se=mean(se))
+
+o2 %>%
+  ggplot(., aes(x=model, y=bivhat)) +
+  geom_hline(yintercept=0.2) +
+  geom_boxplot(aes(fill=as.factor(pop)))
+```
+## Instrument significance
+
+```{r}
+o31 <- pblapply(1:100, function(i)
+{
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=0.2,
+    biv2=0.2,
+    pl1=0,
+    pl2=0,
+    absx=FALSE,
+    gx_same=FALSE,
+    instrument_threshold = 5e-8,
+    winnerscurse_adjustment = TRUE
+  ) %>%
+    {.$res} %>%
+    mutate(sim=i, wc=TRUE)
+}) %>% bind_rows()
+
+o32 <- pblapply(1:100, function(i)
+{
+  sim1(
+    nsnp=100,
+    nid1x=10000,
+    nid2x=10000,
+    nid1y=10000,
+    nid2y=10000,
+    h2=0.3,
+    S=0,
+    biv1=0.2,
+    biv2=0.2,
+    pl1=0,
+    pl2=0,
+    absx=FALSE,
+    gx_same=FALSE,
+    instrument_threshold = 5e-8,
+    winnerscurse_adjustment = FALSE
+  ) %>%
+    {.$res} %>%
+    mutate(sim=i, wc=FALSE)
+}) %>% bind_rows()
+
+o3 <- rbind(o31, o32)
+o3 %>% 
+  group_by(model, pop, wc) %>%
+  summarise(bivhat=mean(bivhat), se=mean(se))
+
+o3 %>%
+  ggplot(., aes(x=model, y=bivhat)) +
+  geom_hline(yintercept=0.2) +
+  geom_boxplot(aes(fill=as.factor(pop))) +
+  facet_grid(. ~ wc)
+```
+- Winner's curse seems to be introducing a slight downward bias.
+
+
+
 ## Introducing pleiotropy
 
 ```{r}
@@ -321,8 +444,8 @@ Simulate where the effect is either null in both populations or $b_{pop} \sim N(
 ```{r}
 od <- pblapply(1:500, function(i)
 {
-  biv1=sample(c(0, rnorm(1, sd=0.1)), 1)
-  biv2=sample(c(0, rnorm(1, sd=0.1)), 1)
+  biv1=sample(c(0, rnorm(1, sd=0.01)), 1)
+  biv2=sample(c(0, rnorm(1, sd=0.01)), 1)
   sim1(
     nsnp=100,
     nid1x=10000,

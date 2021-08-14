@@ -1,0 +1,556 @@
+---
+title: "Instrument specificity simulations"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(simulateGP)
+library(pbapply)
+library(parallel)
+library(pROC)
+```
+
+
+Function to estimate the proportion overlap
+
+```{r}
+prop_overlap = function(b_disc, b_rep, se_disc, se_rep, alpha)
+{
+  p_sign <- pnorm(-abs(b_disc) / se_disc) * pnorm(-abs(b_disc) / se_rep) + ((1 - pnorm(-abs(b_disc) / se_disc)) * (1 - pnorm(-abs(b_disc) / se_rep)))
+  p_sig <- pnorm(-abs(b_disc) / se_rep + qnorm(alpha / 2)) + (1 - pnorm(-abs(b_disc) / se_rep - qnorm(alpha / 2)))
+  p_rep <- pnorm(abs(b_rep)/se_rep, lower.tail=FALSE)
+  res <- dplyr::tibble(
+    nsnp=length(b_disc),
+    metric=c("Sign", "Sign", "P-value", "P-value"),
+    datum=c("Expected", "Observed", "Expected", "Observed"),
+    value=c(sum(p_sign, na.rm=TRUE), sum(sign(b_disc) == sign(b_rep)), sum(p_sig, na.rm=TRUE), sum(p_rep < alpha, na.rm=TRUE))
+  )
+  return(list(res=res, variants=dplyr::tibble(sig=p_sig, sign=p_sign, fdisc=b_disc^2/se_disc^2, frep=b_rep^2/se_rep^2)))
+}
+```
+
+
+Simulate GWAS in pop1 and pop2
+- independent allele frequencies
+- some amount of shared causal variants
+- effect sizes the same if causal variant is shared
+
+```{r}
+sim1 <- function(nsnp1, nsnp2, nshared, nid1, nid2, hsq1, hsq2, S1, S2, sim=1, winnerscurse=TRUE)
+{
+	# Create map of variants
+  nsnp <- nsnp1 + nsnp2 + nshared
+  map1 <- tibble(snp=1:nsnp, af=runif(nsnp, 0.05, 0.95), what=c(rep("1", nsnp1), rep("2", nsnp2), rep("both", nshared)))
+  map2 <- tibble(snp=1:nsnp, af=runif(nsnp, 0.05, 0.95), what=c(rep("1", nsnp1), rep("2", nsnp2), rep("both", nshared)))
+
+  # Generate summary stats
+  x1 <- subset(map1, what != "2") %>%
+    generate_gwas_params(., h2=hsq1, Pi=1, S=S1) %>%
+    {bind_rows(
+      .,
+      subset(map1, what == "2") %>% mutate(beta=0)
+    )} %>%
+    arrange(snp)
+
+  x2 <- subset(map2, what != "1") %>%
+    generate_gwas_params(., h2=hsq2, Pi=1, S=S2) %>%
+    {bind_rows(
+      .,
+      subset(map2, what == "1") %>% mutate(beta=0)
+    )} %>%
+    arrange(snp)
+  x2$beta[x2$what=="both"] <- x1$beta[x1$what=="both"]
+
+  b1 <- x1$beta
+  b2 <- x2$beta
+  x1 <- x1 %>%
+    generate_gwas_ss(., nid=nid1)
+  x1$beta <- b1
+  
+  x2 <- x2 %>%
+    generate_gwas_ss(., nid=nid2)
+  x2$beta <- b2
+
+  # Check if any significant hits exist
+  s1 <- subset(x1, pval < 5e-8)$snp
+  if(length(s1) == 0) {
+    return(NULL)
+  }
+  s2 <- subset(x2, pval < 5e-8)$snp
+  if(length(s2) == 0) {
+    return(NULL)
+  }
+
+  # Calculate replication of pop1 hits in pop2  
+  thresh1 <- 0.05/length(s1)
+  if(winnerscurse)
+  {
+    o1 <- prop_overlap(x1$bhat[s1], x2$bhat[s1], x1$se[s1], x2$se[s1], thresh1)
+  } else {
+    o1 <- prop_overlap(rnorm(length(s1), x1$beta[s1], x1$se[s1]), x2$bhat[s1], x1$se[s1], x2$se[s1], thresh1)
+  }
+  o1$variants$snp <- s1
+  o1$variants$truth <- x2$what[s1] %in% c("2", "both")
+  o1$variants$obs_sig <- x2$pval[s1] < thresh1
+  o1$variants$obs_sign <- sign(x2$bhat[s1]) == sign(x1$bhat[s1])
+  o1$variants$correct_sig <- o1$variants$truth == o1$variants$obs_sig
+  o1$variants$pred <- o1$variants$sig
+  o1$variants$pred[!o1$variants$obs_sig] <- 1 - o1$variants$pred[!o1$variants$obs_sig]
+
+  # Calculate replication of pop2 hits in pop1  
+  thresh2 <- 0.05/length(s2)
+  if(winnerscurse)
+  {
+    o2 <- prop_overlap(x2$bhat[s2], x1$bhat[s2], x2$se[s2], x1$se[s2], thresh2)
+  } else {
+    o2 <- prop_overlap(rnorm(length(s2), x2$beta[s2], x2$se[s2]), x1$bhat[s2], x2$se[s2], x1$se[s2], thresh2)
+  }
+  o2$variants$snp <- s2
+  o2$variants$truth <- x1$what[s2] %in% c("1", "both")
+  o2$variants$obs_sig <- x1$pval[s2] < thresh2
+  o2$variants$obs_sign <- sign(x1$bhat[s2]) == sign(x2$bhat[s2])
+  o2$variants$correct_sig <- o2$variants$truth == o2$variants$obs_sig
+  o2$variants$pred <- o2$variants$sig
+  o2$variants$pred[!o2$variants$obs_sig] <- 1 - o2$variants$pred[!o2$variants$obs_sig]
+  
+  # truth = whether a variant actually has an effect in both pops
+  # pred = prob(sig) (for overlaps) or 1-prob(sig) (for non-overlaps)
+  # auc = extent to which pred can predict truth
+  o1$auc <- tryCatch(as.numeric(suppressMessages(auc(o1$variants$truth, o1$variants$pred))), error=function(e) return(NA))
+  o2$auc <- tryCatch(as.numeric(suppressMessages(auc(o2$variants$truth, o2$variants$pred))), error=function(e) return(NA))
+  
+  obs_rep1 = subset(o1$res, metric == "P-value" & datum == "Observed")$value[1]
+  obs_rep2 = subset(o2$res, metric == "P-value" & datum == "Observed")$value[1]
+  exp_rep1 = subset(o1$res, metric == "P-value" & datum == "Expected")$value[1]
+  exp_rep2 = subset(o2$res, metric == "P-value" & datum == "Expected")$value[1]
+  binom1 = binom.test(x=obs_rep1, n=length(s1), p=exp_rep1/length(s1))
+  binom2 = binom.test(x=obs_rep2, n=length(s2), p=exp_rep2/length(s2))
+  
+  res <- tibble(
+    nsnp1=nsnp1, nsnp2=nsnp2, nshared=nshared, nid1=nid1, nid2=nid2, hsq1=hsq1, hsq2=hsq2, S1=S1, S2=S2, winnerscurse=winnerscurse, nsig1=length(s1), nsig2=length(s2), auc1=o1$auc, auc2=o2$auc, sim=sim, correct_sig1=sum(o1$variants$correct_sig)/length(o1$variants$correct_sig), correct_sig2=sum(o2$variants$correct_sig)/length(o2$variants$correct_sig), obs_rep1=obs_rep1, obs_rep2=obs_rep2, exp_rep1=exp_rep1, exp_rep2=exp_rep2, binom_p1 = binom1$p.value, binom_p2 = binom2$p.value
+  )
+  
+  return(res)
+}
+```
+
+Example of simulation in which 300 variants are shared, 300 unique to each pop. 
+
+```{r}
+sim1(nsnp1=0, nsnp2=0, nshared=300, nid1=10000, nid2=10000, hsq1=0.4, hsq2=0.4, S1=1, S2=1) %>% as.list()
+```
+
+Pop1 has a larger sample size than pop2. We see that the AUC for 1 is relatively high - meaning that the per-variant sig value is a good indicator of whether a variant is shared in the two populations. AUC for 2 is higher because the replication from smaller sample to larger sample is better powered.
+
+Perform simulations for a range of sample sizes
+
+```{r}
+param <- expand.grid(
+  nsnp1=1000,
+  nsnp2=1000,
+  nshared=c(1000),
+  nid1=100000,
+  nid2=seq(1000,100000,by=1000),
+  hsq1=0.4,
+  hsq2=0.4,
+  S1=1,
+  S2=1,
+  sim=1:10
+)
+
+o <- lapply(1:nrow(param), function(i)
+  {
+    do.call(sim1, args=param[i,])
+  }) %>% bind_rows()
+
+```
+
+
+```{r}
+o %>% 
+  ggplot(., aes(x=nid2, y=auc2)) +
+  geom_point()
+```
+
+As discovery sample size increases the replication gets worse - this is because discovery finds more smaller effects which are harder to replicate. Winner's curse may play a role.
+
+```{r}
+o %>% 
+  ggplot(., aes(x=nid2, y=auc1)) +
+  geom_point()
+```
+As replication sample size gets smaller the per-variant AUC tends towards random chance
+
+```{r}
+o %>% ggplot(., aes(x=auc1, y=correct_sig1)) +
+geom_point()
+```
+AUC is roughly the same as the fraction of significant variants being correct
+
+```{r}
+o %>% ggplot(., aes(x=auc2, y=correct_sig2)) +
+geom_point()
+```
+AUC is roughly the same as the fraction of significant variants being correct
+
+
+```{r}
+o %>% ggplot(., aes(y=obs_rep1 / exp_rep1, x=nsig2)) +
+  geom_point()
+```
+- The estimated replication rate matches the expected replication rate
+- The per-variant prediction gets worse as the power gets worse
+
+
+```{r}
+param <- expand.grid(
+  nsnp1=0,
+  nsnp2=0,
+  nshared=c(3000),
+  nid1=100000,
+  nid2=seq(10000,500000,by=5000),
+  hsq1=0.4,
+  hsq2=0.4,
+  S1=1,
+  S2=1,
+  winnerscurse=c(TRUE, FALSE),
+  sim=1:10
+)
+
+o2 <- lapply(1:nrow(param), function(i)
+  {
+    do.call(sim1, args=param[i,])
+  }) %>% bind_rows()
+```
+
+```{r}
+o2 %>% ggplot(., aes(y=obs_rep1 / exp_rep1, x=nid2)) +
+  geom_point(aes(colour=winnerscurse))
+```
+
+```{r}
+o2 %>% ggplot(., aes(y=obs_rep2 / exp_rep2, x=nid2)) +
+  geom_point(aes(colour=winnerscurse))
+```
+```{r}
+o2 %>% ggplot(., aes(y=-log10(binom_p1), x=nid2)) +
+  geom_point(aes(colour=winnerscurse)) +
+  geom_smooth(aes(colour=winnerscurse))
+```
+
+```{r}
+o2 %>% ggplot(., aes(y=-log10(binom_p2), x=nid2)) +
+  geom_point(aes(colour=winnerscurse)) +
+  geom_smooth(aes(colour=winnerscurse))
+```
+- The prediction of overall number predicted to replicate matches the actual number of shared variants well but gets noisier when power gets lower
+- Testing if the difference in expected and observed seems to work except when replication sample size is small - at which point it becomes important to control for winner's curse of the discovery effect estimate
+
+```{r}
+param <- expand.grid(
+  nsnp1=seq(0, 3000, by=750),
+  nsnp2=seq(0, 3000, by=750),
+  nshared=c(3000),
+  nid1=100000,
+  nid2=seq(50000,500000,by=100000),
+  hsq1=0.4,
+  hsq2=0.4,
+  S1=1,
+  S2=1,
+  winnerscurse=c(TRUE, FALSE),
+  sim=1:8
+)
+
+o3 <- lapply(1:nrow(param), function(i)
+  {
+    do.call(sim1, args=param[i,])
+  }) %>% bind_rows()
+
+```
+
+```{r}
+o3 %>% group_by(pshared=nshared/(nshared+nsnp1+nsnp2), nid2, winnerscurse) %>%
+  summarise(pow=sum(binom_p2 < 0.05)/n()) %>%
+  ggplot(., aes(y=pow, x=pshared)) +
+    geom_point(aes(colour=as.factor(log(nid2)))) +
+    geom_line(aes(colour=as.factor(log(nid2)), group=nid2)) +
+    facet_grid(. ~ winnerscurse)
+```
+```{r}
+o3 %>% group_by(pshared=nshared/(nshared+nsnp1+nsnp2), nid2, winnerscurse) %>%
+  summarise(pow=sum(binom_p1 < 0.05)/n()) %>%
+  ggplot(., aes(y=pow, x=pshared)) +
+    geom_point(aes(colour=as.factor(log(nid2)))) +
+    geom_line(aes(colour=as.factor(log(nid2)), group=nid2)) +
+    facet_grid(. ~ winnerscurse)
+```
+
+```{r}
+o3 %>% ggplot(., aes(y=-log10(binom_p2), x=nshared/(nshared+nsnp1+nsnp2))) +
+  geom_point(aes(colour=winnerscurse))
+```
+
+```{r}
+cont <- 
+o3 %>% group_by(pshared=nshared/(nshared+nsnp1+nsnp2), nid2, winnerscurse) %>%
+  summarise(pow=sum(binom_p2 < 0.05)/n()) %>%
+  ggplot(., aes(y=pow, x=pshared)) +
+    geom_point(aes(colour=nid2)) +
+    geom_smooth(aes(colour=nid2)) +
+    facet_grid(. ~ winnerscurse)
+
+```
+
+
+## LD regions
+
+Now run simulations that allow for the raw and maxz methods for testing for replication
+
+### Generate LD matrices for simulations
+
+```{r}
+bEUR <- "/Users/gh13047/repo/mr-base-api/app/ld_files/EUR"
+bAFR <- "/Users/gh13047/repo/mr-base-api/app/ld_files/AFR"
+bEAS <- "/Users/gh13047/repo/mr-base-api/app/ld_files/EAS"
+
+varrefEUR <- simulateGP:::variant_reference(bEUR)
+varrefAFR <- simulateGP:::variant_reference(bAFR)
+varrefEAS <- simulateGP:::variant_reference(bEAS)
+```
+
+```{r}
+regions <- system.file(paste0("extdata/ldetect/EUR.bed"), package = "simulateGP") %>% 
+        data.table::fread(., header = TRUE) %>% dplyr::mutate(chr = as.numeric(gsub("chr", 
+        "", chr)), start = as.numeric(start), stop = as.numeric(stop)) %>% 
+        dplyr::as_tibble()
+```
+
+```{r}
+
+mapEUR <- generate_ldobj("ldEUR", bEUR, regions[c(100), ])
+mapEAS <- generate_ldobj("ldEAS", bEAS, regions[c(100), ])
+mapAFR <- generate_ldobj("ldAFR", bAFR, regions[c(100), ])
+```
+
+
+```{r}
+ldEUR <- read_ldobjdir("ldEUR")[[1]]
+ldAFR <- read_ldobjdir("ldAFR")[[1]]
+ldEAS <- read_ldobjdir("ldEAS")[[1]]
+```
+
+Now create a new map that has exactly the same set of variants shared across all three ancestries
+
+```{r}
+organise_ldobj <- function(dir1, dir2, region)
+{
+  ld1 <- readRDS(file.path(dir1, paste0("ldobj_", region, ".rds")))
+  ld2 <- readRDS(file.path(dir2, paste0("ldobj_", region, ".rds")))
+  x1 <- unique(ld1$map$snp)
+  x1 <- x1[x1 %in% ld1$map$snp]
+  x1 <- x1[x1 %in% ld2$map$snp]
+  i1 <- which(ld1$map$snp %in% x1)
+  ld1$map <- ld1$map[i1,]
+  ld1$ld <- ld1$ld[i1, i1]
+  i2 <- which(ld2$map$snp %in% x1)
+  ld2$map <- ld2$map[i2,]
+  ld2$ld <- ld2$ld[i2, i2]
+  stopifnot(all(ld1$map$snp == ld2$map$snp))
+  return(list(ld1=ld1, ld2=ld2))
+}
+```
+
+
+### Function for developing simulated GWAS summary data from LD matrices
+
+```{r}
+subset_ldobj <- function(ldobj, snps)
+{
+  i <- which(ldobj$map$snp %in% snps)
+  ldobj$map <- ldobj$map[i,]
+  ldobj$ld <- ldobj$ld[i,i]
+  return(ldobj)
+}
+
+simss <- function(ld1, ld2, nid1, nid2, type, hsq1, window)
+{
+  x1 <- ld1$map %>%
+    generate_gwas_params(h2=hsq1, S=0, Pi=1/nrow(.))
+  pos1 <- x1$pos[x1$beta != 0] - window/2
+  pos2 <- pos1 + window
+  
+  x1 <- subset(x1, pos >= pos1 & pos <= pos2)  
+  ld1 <- subset_ldobj(ld1, x1$snp)
+  ld2 <- subset_ldobj(ld2, x1$snp)
+  
+  x1 <- x1 %>%
+    generate_gwas_ss(nid=nid1, ldobj=ld1)
+  
+  x2 <- ld2$map %>% generate_gwas_params(h2=hsq1, S=0, Pi=1/nrow(.))
+  if(type=="shared")
+  {
+    x2$beta <- x1$beta
+  } else if(type == "1") {
+    x2$beta <- 0
+  }
+  
+  x2 <- x2 %>%
+    generate_gwas_ss(nid=nid2, ldobj=ld2)
+  
+  return(list(x1=x1, x2=x2))
+}
+
+plot_simss <- function(s)
+{
+  raw <- which.max(s[[1]]$fval)
+  maxz <- which.max(s[[1]]$fval + s[[2]]$fval)
+  i <- tibble(pos=c(s[[1]]$pos[raw], s[[1]]$pos[maxz]), method=c("raw", "maxz"))
+  rbind(
+    tibble(snp=s[[1]]$snp, pos=s[[1]]$pos, pval=-log10(s[[1]]$pval), causal=s[[1]]$beta != 0, what="pop1"),
+    tibble(snp=s[[1]]$snp, pos=s[[1]]$pos, pval=-log10(s[[2]]$pval), causal=s[[2]]$beta != 0, what="pop2")
+  ) %>%
+    ggplot(., aes(x=pos, y=pval)) +
+    geom_point(aes(colour=causal, size=causal, shape=what)) +
+    facet_grid(what ~ .) +
+    geom_hline(yintercept=0) +
+    geom_vline(data=i, aes(xintercept=pos, linetype=method))
+}
+ld <- organise_ldobj("ldEUR", "ldAFR", "1_196176201_197311514")
+ld1 <- ld[[1]]
+ld2 <- ld[[2]]
+s <- simss(ld1, ld2, 10000, 10000, "distinct", 0.008, 250000)
+plot_simss(s)
+```
+
+
+
+```{r}
+sim2 <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct, p1, hsq1=0.004, window=250000, winnerscurse=TRUE, sim=1, mc.cores=1)
+{
+  type <- sample(c("shared", "distinct", "1"), nsim, replace=T, prob=c(pshared, pdistinct, p1))
+  ld <- organise_ldobj(lddir1, lddir2, region)
+  l <- mclapply(1:nsim, function(i)
+  {
+    message(i)
+    x <- simss(ld[[1]], ld[[2]], nid1, nid2, type[i], hsq1, window)
+    x1 <- x$x1
+    x2 <- x$x2
+    # Get the top hit for 1 and check for overlap in 2
+    x1raw <- subset(x1, fval==max(fval, na.rm=T))[1,]
+    x2raw <- subset(x2, snp == x1raw$snp)
+    if(winnerscurse)
+    {
+      oraw <- prop_overlap(x1raw$bhat, x2raw$bhat, x1raw$se, x2raw$se, 0.05/nsim)
+    } else {
+      oraw <- prop_overlap(rnorm(nrow(x1raw), x1raw$beta, x1raw$se), x2raw$bhat, x1raw$se, x2raw$se, 0.05/nsim)
+    }
+    
+    fvalsum <- x1$fval + x2$fval
+    maxz <- which.max(fvalsum)[1]
+    x1maxz <- x1[maxz, ]
+    x2maxz <- x2[maxz, ]
+    if(winnerscurse)
+    {
+      omaxz <- prop_overlap(x1maxz$bhat, x2maxz$bhat, x2maxz$se, x2maxz$se, 0.05/nsim)
+    } else {
+      omaxz <- prop_overlap(rnorm(nrow(x1maxz), x1maxz$beta, x1maxz$se), x2maxz$bhat, x2maxz$se, x2maxz$se, 0.05/nsim)
+    }
+    return(list(raw=oraw, maxz=omaxz))
+  }, mc.cores=mc.cores)
+  
+  sig <- which(sapply(l, function(x) !is.null(x)))
+  l[sapply(l, is.null)] <- NULL
+  o1 <- list(res=l[[1]]$raw$res)
+  o1$variants <- lapply(l, function(x)
+  {
+    x$raw$variants
+  }) %>% bind_rows()
+  o1$res$value <- sapply(l, function(x) x$raw$res$value) %>% rowSums()
+  
+  o1$variants$snp <- sig
+  o1$variants$truth <- type[sig] == "shared"
+  o1$variants$obs_sig <- sapply(l, function(x) x$raw$res$value[4])
+  o1$variants$obs_sign <- sapply(l, function(x) x$raw$res$value[2])
+  o1$variants$correct_sig <- o1$variants$truth == o1$variants$obs_sig
+  o1$variants$pred <- o1$variants$sig
+  o1$variants$pred[!o1$variants$obs_sig] <- 1 - o1$variants$pred[!o1$variants$obs_sig]
+
+
+  o2 <- list(res=l[[1]]$maxz$res)
+  o2$variants <- lapply(l, function(x)
+  {
+    x$maxz$variants
+  }) %>% bind_rows()
+  o2$res$value <- sapply(l, function(x) x$maxz$res$value) %>% rowSums()
+  
+  o2$variants$snp <- sig
+  o2$variants$truth <- type[sig] == "shared"
+  o2$variants$obs_sig <- sapply(l, function(x) x$maxz$res$value[4])
+  o2$variants$obs_sign <- sapply(l, function(x) x$maxz$res$value[2])
+  o2$variants$correct_sig <- o2$variants$truth == o2$variants$obs_sig
+  o2$variants$pred <- o2$variants$sig
+  o2$variants$pred[!o2$variants$obs_sig] <- 1 - o2$variants$pred[!o2$variants$obs_sig]
+  
+  # truth = whether a variant actually has an effect in both pops
+  # pred = prob(sig) (for overlaps) or 1-prob(sig) (for non-overlaps)
+  # auc = extent to which pred can predict truth
+  o1$auc <- tryCatch(as.numeric(suppressMessages(auc(o1$variants$truth, o1$variants$pred))), error=function(e) return(NA))
+  o2$auc <- tryCatch(as.numeric(suppressMessages(auc(o2$variants$truth, o2$variants$pred))), error=function(e) return(NA))
+  
+  perf1 <- o1$variants %>% group_by(truth) %>% summarise(pow=sum(frep > qf(0.05/nsim, 1, nid2, low=F))/n(), meanf=mean(frep))
+  perf2 <- o2$variants %>% group_by(truth) %>% summarise(pow=sum(frep > qf(0.05/nsim, 1, nid2, low=F))/n(), meanf=mean(frep))
+  print(perf1)
+  print(perf2)
+  print(o1$variants)
+  print(o2$variants)
+  
+  obs_rep1 = subset(o1$res, metric == "P-value" & datum == "Observed")$value[1]
+  obs_rep2 = subset(o2$res, metric == "P-value" & datum == "Observed")$value[1]
+  exp_rep1 = subset(o1$res, metric == "P-value" & datum == "Expected")$value[1]
+  exp_rep2 = subset(o2$res, metric == "P-value" & datum == "Expected")$value[1]
+  binom1 = binom.test(x=obs_rep1, n=length(sig), p=exp_rep1/length(sig))
+  binom2 = binom.test(x=obs_rep2, n=length(sig), p=exp_rep2/length(sig))
+  
+  res <- tibble(
+    lddir1=lddir1, lddir2=lddir2, region=region, nid1=nid1, nid2=nid2, pshared=pshared, pdistinct=pdistinct, p1=p1, hsq1=hsq1, window=window, winnerscurse=winnerscurse, nsig=length(sig), auc1=o1$auc, auc2=o2$auc, sim=sim, correct_sig1=sum(o1$variants$correct_sig)/length(o1$variants$correct_sig), correct_sig2=sum(o2$variants$correct_sig)/length(o2$variants$correct_sig), obs_rep1=obs_rep1, obs_rep2=obs_rep2, exp_rep1=exp_rep1, exp_rep2=exp_rep2, binom_p1 = binom1$p.value, binom_p2 = binom2$p.value, fdr1=subset(perf1, !truth)$pow, fdr2=subset(perf2, !truth)$pow, pow1=subset(perf1, truth)$pow, pow2=subset(perf2, truth)$pow
+  )
+  
+  return(res)
+
+}
+```
+
+```{r}
+o <- sim2("ldEUR", "ldEAS", "1_196176201_197311514", 10000, 10000, 1/2, 0, 1/2, nsim=10, hsq1=0.004, window=250000, winnerscurse=TRUE)
+str(o)
+```
+
+
+```{r}
+param <- expand.grid(
+  lddir1="ldEUR",
+  lddir2="ldEAS",
+  region="1_196176201_197311514",
+  nid1=100000,
+  nid2=c(50000, 100000, 200000),
+  pshared=1/2,
+  pdistinct=1/2,
+  p1=1/2,
+  nsim=100,
+  hsq1=0.4,
+  window=250000,
+  sim=1:5
+)
+
+o4 <- lapply(1:nrow(param), function(i)
+  {
+    do.call(sim2, args=param[i,])
+  }) %>% bind_rows()
+```
+
+
+
+
+
+
