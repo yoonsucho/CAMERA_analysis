@@ -142,7 +142,7 @@ sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct
   o1$res$value <- sapply(l, function(x) x$raw$res$value) %>% rowSums()
   
   o1$variants$snp <- sig
-  o1$variants$truth <- type[sig] == "shared"
+  o1$variants$truth <- type[sig] %in% c("shared", "distinct")
   o1$variants$obs_sig <- sapply(l, function(x) x$raw$res$value[4])
   o1$variants$obs_sign <- sapply(l, function(x) x$raw$res$value[2])
   o1$variants$correct_sig <- o1$variants$truth == o1$variants$obs_sig
@@ -158,7 +158,7 @@ sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct
   o2$res$value <- sapply(l, function(x) x$maxz$res$value) %>% rowSums()
   
   o2$variants$snp <- sig
-  o2$variants$truth <- type[sig] == "shared"
+  o2$variants$truth <- type[sig] %in% c("shared", "distinct")
   o2$variants$obs_sig <- sapply(l, function(x) x$maxz$res$value[4])
   o2$variants$obs_sign <- sapply(l, function(x) x$maxz$res$value[2])
   o2$variants$correct_sig <- o2$variants$truth == o2$variants$obs_sig
@@ -181,6 +181,9 @@ sim <- function(lddir1, lddir2, region, nid1, nid2, nsim=100, pshared, pdistinct
   binom1 = binom.test(x=obs_rep1, n=length(sig), p=exp_rep1/length(sig))
   binom2 = binom.test(x=obs_rep2, n=length(sig), p=exp_rep2/length(sig))
   
+  print(str(o1))
+  print(str(o2))
+
   res <- tibble(
     lddir1=lddir1,
     lddir2=lddir2,
