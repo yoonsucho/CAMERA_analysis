@@ -19,16 +19,22 @@ param <- expand.grid(
   hsq1=0.1,
   window=250000,
   sim=1:3,
+  bxy1=0.2,
+  bxy2=0.2,
   mc.cores=16
 ) %>% filter(
-  pshared + pdistinct + p1 == 1
-)
+    pshared + pdistinct + p1 == 1
+  ) %>%
+  mutate(simid=1:n())
 
 dim(param)
 o <- mclapply(1:nrow(param), function(i)
   {
     message(i, " of ", nrow(param))
     tryCatch(do.call(sim, args=param[i,]), error=function(e) {print(e); return(NULL)})
-  }, mc.cores=1) %>% bind_rows()
+  }, mc.cores=1)
 
-save(o, file=here("results", "instrument_specificity.rdata"))
+oinst <- lapply(o, function(x) x$instruments) %>% bind_rows()
+omr <- lapply(o, function(x) x$mr) %>% bind_rows() %>% inner_join(param, by="simid")
+
+save(oinst, omr, file=here("results", "instrument_specificity.rdata"))
