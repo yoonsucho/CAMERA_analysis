@@ -1,0 +1,77 @@
+---
+title: Instrument specificity simulation results analysis
+---
+
+```{r}
+library(tidyverse)
+library(here)
+load(here("results", "instrument_specificity.rdata"))
+
+common <- o %>% select(lddir1:nsig, matches("[a-z]$", perl=T))
+ncom <- o %>% select(! names(common))
+
+ncom1 <- ncom %>% select(ends_with("1")) %>% mutate(method="raw")
+names(ncom1) <- gsub("1", "", names(ncom1))
+ncom2 <- ncom %>% select(ends_with("2")) %>% mutate(method="maxz")
+names(ncom2) <- gsub("2", "", names(ncom1))
+
+o1 <- bind_rows(cbind(common, ncom1), cbind(common, ncom2))
+
+o1s <- o1 %>% group_by(nid2, lddir2, method, pshared) %>%
+  summarise(
+    n=n(),
+    prop_same=mean(prop_same),
+    auc=mean(auc),
+    correct_sig=mean(correct_sig),
+    obs_rep=mean(obs_rep),
+    exp_rep=mean(exp_rep),
+    binom_p=mean(-log10(binom_p)),
+    fdr=mean(fdr),
+    pow=mean(pow)
+  ) %>% ungroup %>% 
+  mutate(
+    lddir2=basename(as.character(lddir2)), 
+    cv=case_when(pshared == 0 ~ "Distinct CV", TRUE ~ "Shared CV"),
+    lddir2=gsub("ld", "EUR - ", lddir2)
+  )
+```
+
+
+
+```{r}
+ggplot(o1s, aes(x=nid2, y=auc)) +
+geom_point(aes(colour=method)) +
+geom_line(aes(colour=method)) +
+facet_grid(lddir2 ~ cv)
+```
+
+```{r}
+ggplot(o1s, aes(x=nid2, y=binom_p)) +
+geom_point(aes(colour=method)) +
+geom_line(aes(colour=method)) +
+facet_grid(lddir2 ~ cv)
+```
+
+```{r}
+o1s %>% 
+  group_by(nid2, method) %>%
+  summarise(fdr=mean(fdr)) %>%
+  ggplot(., aes(x=nid2, y=fdr)) +
+  geom_point(aes(colour=method))
+  geom_line(aes(colour=method))
+```
+
+```{r}
+ggplot(o1s, aes(x=nid2, y=pow)) +
+geom_point(aes(colour=method)) +
+geom_line(aes(colour=method)) +
+facet_grid(lddir2 ~ cv)
+```
+
+```{r}
+ggplot(o1s, aes(x=nid2, y=prop_same)) +
+geom_point(aes(colour=cv)) +
+geom_line(aes(colour=cv)) +
+facet_grid(lddir2 ~ .)
+```
+
