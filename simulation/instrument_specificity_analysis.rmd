@@ -7,17 +7,12 @@ library(tidyverse)
 library(here)
 load(here("results", "instrument_specificity.rdata"))
 
-common <- o %>% select(lddir1:nsig, matches("[a-z]$", perl=T))
-ncom <- o %>% select(! names(common))
+# Pull back parameters that were omitted frmo output in oinst
+temp <- subset(omr, !duplicated(simid), select=c(simid, lddir1, lddir2, region, nid1, nid2, removecv, pshared, pdistinct, p1, nsim, hsq1, window, sim, bxy1, bxy2, mc.cores))
+temp2 <- subset(oinst, select=c("simid", names(oinst)[!names(oinst) %in% names(temp)]))
+oinst <- inner_join(temp2, temp, by="simid")
 
-ncom1 <- ncom %>% select(ends_with("1")) %>% mutate(method="raw")
-names(ncom1) <- gsub("1", "", names(ncom1))
-ncom2 <- ncom %>% select(ends_with("2")) %>% mutate(method="maxz")
-names(ncom2) <- gsub("2", "", names(ncom1))
-
-o1 <- bind_rows(cbind(common, ncom1), cbind(common, ncom2))
-
-o1s <- o1 %>% group_by(nid2, lddir2, method, pshared) %>%
+o1s <- oinst %>% group_by(nid2, lddir2, method, removecv, pshared) %>%
   summarise(
     n=n(),
     prop_same=mean(prop_same),
@@ -40,38 +35,38 @@ o1s <- o1 %>% group_by(nid2, lddir2, method, pshared) %>%
 
 ```{r}
 ggplot(o1s, aes(x=nid2, y=auc)) +
-geom_point(aes(colour=method)) +
-geom_line(aes(colour=method)) +
+geom_point(aes(colour=method, shape=removecv)) +
+geom_line(aes(colour=method, linetype=removecv)) +
 facet_grid(lddir2 ~ cv)
 ```
 
 ```{r}
 ggplot(o1s, aes(x=nid2, y=binom_p)) +
-geom_point(aes(colour=method)) +
-geom_line(aes(colour=method)) +
+geom_point(aes(colour=method, shape=removecv)) +
+geom_line(aes(colour=method, linetype=removecv)) +
 facet_grid(lddir2 ~ cv)
 ```
 
 ```{r}
 o1s %>% 
-  group_by(nid2, method) %>%
+  group_by(nid2, removecv, method) %>%
   summarise(fdr=mean(fdr)) %>%
   ggplot(., aes(x=nid2, y=fdr)) +
-  geom_point(aes(colour=method))
-  geom_line(aes(colour=method))
+  geom_point(aes(colour=method, shape=removecv)) +
+  geom_line(aes(colour=method, linetype=removecv))
 ```
 
 ```{r}
 ggplot(o1s, aes(x=nid2, y=pow)) +
-geom_point(aes(colour=method)) +
-geom_line(aes(colour=method)) +
+geom_point(aes(colour=method, shape=removecv)) +
+geom_line(aes(colour=method, linetype=removecv)) +
 facet_grid(lddir2 ~ cv)
 ```
 
 ```{r}
 ggplot(o1s, aes(x=nid2, y=prop_same)) +
-geom_point(aes(colour=cv)) +
-geom_line(aes(colour=cv)) +
+geom_point(aes(colour=cv, shape=removecv)) +
+geom_line(aes(colour=cv, linetype=removecv)) +
 facet_grid(lddir2 ~ .)
 ```
 
