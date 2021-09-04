@@ -1,0 +1,45 @@
+CHUNKSIZE=1000
+CHUNK=range(0,1000)
+NCHUNK=len(CHUNK)
+
+rule all:
+	input:
+		"instrument_specificity_analysis.html"
+
+rule dl:
+	output:
+		"../data/ld/AFR.bed"
+	shell:
+		"mkdir -p ../data/ld; cd ../data/ld; wget http://fileserve.mrcieu.ac.uk/ld/1kg.v3.tgz; tar xzvf 1kg.v3.tgz"
+
+rule ld:
+	input:
+		"../data/ld/AFR.bed"
+	output:
+		"../data/ld/maps.rdata"
+	shell:
+		"Rscript generate_ld.r"
+
+rule instrument_specificity:
+	input:
+		"../data/ld/maps.rdata"
+	output:
+		"../results/instrument_specificity/{CHUNK}.rdata"
+	shell:
+		"Rscript instrument_specificity.r {wildcards.CHUNK} {CHUNKSIZE}"
+
+rule aggregate:
+	input:
+		expand("../results/instrument_specificity/{CHUNK}.rdata", CHUNK=CHUNK)
+	output:
+		"../results/instrument_specificity.rdata"
+	shell:
+		"Rscript instrument_specificity_aggregate.r {NCHUNK}"
+
+rule analysis:
+	input:
+		"../results/instrument_specificity.rdata"
+	output:
+		"instrument_specificity_analysis.html"
+	shell:
+		"Rscript -e 'rmarkdown::render(\"instrument_specificity_analysis.rmd\")'"

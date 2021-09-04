@@ -18,16 +18,27 @@ param <- expand.grid(
   nsim=100,
   hsq1=0.1,
   window=250000,
-  sim=1:3,
-  bxy1=0.2,
-  bxy2=0.2,
+  sim=1:50,
+  bxy1=seq(0, 0.1, by=0.01),
+  bxy2=seq(0, 0.1, by=0.01),
   mc.cores=16
 ) %>% filter(
     pshared + pdistinct + p1 == 1
   ) %>%
   mutate(simid=1:n())
-
 dim(param)
+
+
+args <- commandArgs(T)
+chunk <- as.numeric(args[1]) # starts from 0
+chunksize <- as.numeric(args[2])
+nchunk <- ceiling(nrow(param) / chunksize)
+start <- chunk * chunksize + 1
+end <- min((chunk + 1) * chunksize, nrow(param))
+
+param <- param[start:end,]
+
+
 o <- mclapply(1:nrow(param), function(i)
   {
     message(i, " of ", nrow(param))
@@ -37,4 +48,5 @@ o <- mclapply(1:nrow(param), function(i)
 oinst <- lapply(o, function(x) x$instruments) %>% bind_rows()
 omr <- lapply(o, function(x) x$mr) %>% bind_rows() %>% inner_join(param, by="simid")
 
-save(oinst, omr, file=here("results", "instrument_specificity.rdata"))
+save(oinst, omr, file=here("results", "instspec", paste0(chunk, ".rdata")))
+
