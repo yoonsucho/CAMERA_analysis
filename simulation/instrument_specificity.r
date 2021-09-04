@@ -26,7 +26,6 @@ param <- expand.grid(
     pshared + pdistinct + p1 == 1
   ) %>%
   mutate(simid=1:n())
-dim(param)
 
 
 args <- commandArgs(T)
@@ -36,8 +35,11 @@ nchunk <- ceiling(nrow(param) / chunksize)
 start <- chunk * chunksize + 1
 end <- min((chunk + 1) * chunksize, nrow(param))
 
-param <- param[start:end,]
+message("total:", nrow(param))
+message("start: ", start)
+message("end: ", end)
 
+param <- param[start:end,]
 
 o <- mclapply(1:nrow(param), function(i)
   {

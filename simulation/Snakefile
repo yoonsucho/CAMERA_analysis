@@ -1,6 +1,7 @@
 CHUNKSIZE=1000
-CHUNK=range(0,1000)
-NCHUNK=len(CHUNK)
+NCHUNK=216
+CHUNK=range(0,NCHUNK)
+
 
 rule all:
 	input:
@@ -22,7 +23,8 @@ rule ld:
 
 rule instrument_specificity:
 	input:
-		"../data/ld/maps.rdata"
+		"../data/ld/maps.rdata",
+		"instrument_specificity.r"
 	output:
 		"../results/instrument_specificity/{CHUNK}.rdata"
 	shell:
@@ -38,7 +40,8 @@ rule aggregate:
 
 rule analysis:
 	input:
-		"../results/instrument_specificity.rdata"
+		"../results/instrument_specificity.rdata",
+		"instrument_specificity_analysis.rmd"
 	output:
 		"instrument_specificity_analysis.html"
 	shell:

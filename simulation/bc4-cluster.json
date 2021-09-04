@@ -1,0 +1,20 @@
+{
+        "__default__" :
+        {
+                "name": "{rule}",
+                "partition": "test,veryshort,mrcieu",
+                "nodes": "1",
+                "ncpu": "1",
+                "ntask": "1",
+                "time": "04:00:00",
+                "mem": "20G",
+                "output": "job_reports/{rule}.out"
+        },
+        "format" :
+        {
+                "name": "{rule}.{wildcards.CHUNK}",
+                "output": "job_reports/{rule}.{wildcards.CHUNK}.out",
+                "mem": "10G",
+                "time": "14:00:00"
+        }
+}
