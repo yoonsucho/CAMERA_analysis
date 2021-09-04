@@ -70,3 +70,70 @@ geom_line(aes(colour=cv, linetype=removecv)) +
 facet_grid(lddir2 ~ .)
 ```
 
+
+
+## MR
+
+```{r}
+o2s <- omr %>% group_by(nid2, lddir2, instruments, removecv, pshared) %>%
+  summarise(
+    n=n(),
+    auc=mean(auc),
+    correct_sig=mean(correct_sig),
+    obs_rep=mean(obs_rep),
+    exp_rep=mean(exp_rep),
+    binom_p=mean(-log10(binom_p)),
+    fdr=mean(fdr),
+    pow=mean(pow)
+  ) %>% ungroup %>% 
+  mutate(
+    lddir2=basename(as.character(lddir2)), 
+    cv=case_when(pshared == 0 ~ "Distinct CV", TRUE ~ "Shared CV"),
+    lddir2=gsub("ld", "EUR - ", lddir2)
+  )
+
+```
+
+
+```{r}
+ggplot(omr, aes(x=as.factor(nid2), y=bivhat)) +
+geom_boxplot(aes(fill=paste0(Methods, " - ", pop))) +
+facet_grid(lddir2 ~ instruments)
+```
+
+```{r}
+ggplot(omr, aes(x=as.factor(nid2), y=se)) +
+geom_boxplot(aes(fill=paste0(Methods, " - ", pop))) +
+facet_grid(lddir2 ~ instruments)
+```
+
+
+
+```{r}
+omr %>% 
+  filter(Methods %in% c("IVW", "UnweightedSEMa", "UnweightedSEMb")) %>%
+  group_by(method=paste0(Methods, " - ", pop), lddir2, instruments, pshared, nid2) %>%
+  summarise(se=mean(se), bivhat=mean(bivhat)) %>%
+  ggplot(., aes(x=nid2, y=bivhat)) +
+  geom_line(aes(colour=method, linetype=as.factor(pshared))) +
+  geom_point(aes(colour=method, shape=as.factor(pshared))) +
+  facet_grid(lddir2 ~ instruments) +
+  scale_colour_brewer(type="qual") +
+  scale_y_log10()
+```
+
+
+
+```{r}
+omr %>% 
+  filter(Methods %in% c("IVW", "UnweightedSEMa", "UnweightedSEMb")) %>%
+  group_by(method=paste0(Methods, " - ", pop), lddir2, instruments, pshared, nid2) %>%
+  summarise(se=mean(se), bivhat=mean(bivhat)) %>%
+  ggplot(., aes(x=nid2, y=se)) +
+  geom_line(aes(colour=method, linetype=as.factor(pshared))) +
+  geom_point(aes(colour=method, shape=as.factor(pshared))) +
+  facet_grid(lddir2 ~ instruments) +
+  scale_colour_brewer(type="qual") +
+  scale_y_log10()
+```
+
