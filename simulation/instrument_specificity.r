@@ -18,9 +18,9 @@ param <- expand.grid(
   nsim=100,
   hsq1=0.1,
   window=250000,
-  sim=1:50,
-  bxy1=seq(0, 0.1, by=0.01),
-  bxy2=seq(0, 0.1, by=0.01),
+  sim=1:10,
+  bxy1=seq(0, 0.05, by=0.01),
+  bxy2=seq(0, 0.05, by=0.01),
   mc.cores=16
 ) %>% filter(
     pshared + pdistinct + p1 == 1
@@ -41,14 +41,44 @@ message("end: ", end)
 
 param <- param[start:end,]
 
-o <- mclapply(1:nrow(param), function(i)
-  {
-    message(i, " of ", nrow(param))
-    tryCatch(do.call(sim, args=param[i,]), error=function(e) {print(e); return(NULL)})
-  }, mc.cores=1)
+output <- here("results", "instrument_specificity", paste0(chunk, ".rdata"))
+output_int <- paste0(output, ".int")
 
-oinst <- lapply(o, function(x) x$instruments) %>% bind_rows()
-omr <- lapply(o, function(x) x$mr) %>% bind_rows() %>% inner_join(param, by="simid")
+if(file.exists(output))
+{
+  message("already complete")
+  q()
+}
 
-save(oinst, omr, file=here("results", "instspec", paste0(chunk, ".rdata")))
+if(file.exists(output_int))
+{
+  message("Previous run already exists")
+  load(output_int)
+  a <- max(sapply(oinst1, function(x) x$simid))
+  message(sum(param$simid > a), " out of ", nrow(param), " remaining")
+  j <- which(param$simid > a)[1]
+} else {
+  message("New run")
+  oinst1 <- list()
+  omr1 <- list()
+  j <- 1
+}
+
+for(i in j:nrow(param))
+{
+  message(i, " of ", nrow(param))
+  res <- tryCatch(do.call(sim, args=param[i,]), error=function(e) {print(e); return(NULL)})
+  oinst1[[i]] <- res$instruments
+  oinst1[[i]]$simid <- param$simid[i]
+  omr1[[i]] <- res$mr
+  omr1[[i]]$simid <- param$simid[i]
+  save(oinst1, omr1, file=output_int)
+}
+
+
+
+oinst <- bind_rows(oinst1)
+omr <- bind_rows(omr1) %>% inner_join(param, by="simid")
+
+save(oinst, omr, file=output)
 
