@@ -1,0 +1,316 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(simulateGP)
+library(TwoSampleMR)
+library(tidyverse)
+```
+
+
+Simple example
+
+```{r}
+nsnp <- 50
+nid <- 100000
+g <- make_geno(nid, nsnp, af=0.3)
+b1 <- choose_effects(nsnp, 0.3)
+
+bxy1 <- 0.1
+bxy2 <- 0.1
+
+x1 <- make_phen(b1, g)
+x2 <- make_phen(b1, g)
+y1 <- make_phen(c(bxy1), cbind(x1))
+y2 <- make_phen(c(bxy2), cbind(x2))
+
+x <- get_effs(x1, x2, g, xname="x1", yname="x2")
+y <- get_effs(y1, y2, g, xname="y1", yname="y2")
+
+mr(x, method="mr_ivw")
+mr(y, method="mr_ivw")
+```
+
+
+Expect y1->y2 to change if the scale is changed i.e. change the standard deviation of the phenotypes
+
+
+```{r}
+x2a <- x2 * 6
+y2a <- y2 * 4
+
+y1a <- y1 * 10
+
+sd(y1)
+sd(y1a)
+mean(y1)
+mean(y1a)
+mr(get_effs(y1a, y2a, g), meth="mr_ivw")$b 
+```
+
+effect of x1 on y1 (unscaled)
+
+```{r}
+mr(get_effs(x1, y1, g), meth="mr_ivw")
+```
+
+
+```{r}
+mr(subset(get_effs(x2, y2, g), pval.exposure < 5e-8), meth="mr_ivw")
+```
+
+x2 (unscaled) on y2 (scaled)
+
+```{r}
+mr(subset(get_effs(x2, y2a, g), pval.exposure < 5e-8), meth="mr_ivw")
+```
+
+
+```{r}
+mr(subset(get_effs(x1, y1, g), pval.exposure < 5e-8), meth="mr_ivw")
+```
+
+
+```{r}
+mr(subset(get_effs(y1, y2a, g)), meth="mr_ivw")
+```
+
+If the units are different then we can retrieve the comparable results by just scaling the effects by the known standard deviation units. Then we'll be comparing the effects across 1 and 2 in terms of standard deviation units.
+
+What if the mean is different and the effect size in each population is a relative effect e.g. 10% increase. The absolute effect sizes will be different but the relative effect sizes will be the same.
+
+For binary traits if the effects are in log odds ratios then there should be no difference in effects even if the prevalence is different.
+
+
+## Simulations
+
+```{r, message=FALSE, warning=FALSE}
+nsim <- 10
+p <- tibble(
+  	xvar1 = runif(nsim, 0.1, 10),
+  	xvar2 = runif(nsim, 0.1, 10),
+  	yvar1 = runif(nsim, 0.1, 10),
+  	yvar2 = runif(nsim, 0.1, 10),
+  	bxy1 = runif(nsim, 0.2, 0.6) * sample(c(1, -1), nsim, rep=T),
+  	bxy2 = runif(nsim, 0.2, 0.6) * sample(c(1, -1), nsim, rep=T),
+  	bxy1hat = NA,
+  	bxy2hat = NA,
+  	xscale = NA,
+  	yscale = NA
+  )
+
+nsnp <- 50
+nid <- 100000
+g1 <- make_geno(nid, nsnp, af=0.3)
+g2 <- make_geno(nid, nsnp, af=0.3)
+b1 <- choose_effects(nsnp, 0.3)
+b2 <- choose_effects(nsnp, 0.3)
+
+for(i in 1:nsim)
+{
+	message(i)
+	x1 <- make_phen(b1, g1)
+	x2 <- make_phen(b1, g1)
+	y1 <- make_phen(c(p$bxy1[i], b2), cbind(x1, g2))
+	y2 <- make_phen(c(p$bxy2[i], b2), cbind(x2, g2))
+
+	x1a <- x1 * p$xvar1[i]
+	x2a <- x2 * p$xvar2[i]
+	y1a <- y1 * p$yvar1[i]
+	y2a <- y2 * p$yvar2[i]
+
+	# What if there is an effect of 
+	p$xscale[i] <- get_effs(x1a, x2a, g1) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+	p$yscale[i] <- get_effs(y1a, y2a, g2) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+
+	p$bxy1hat[i] <- get_effs(x1a, y1a, g1) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+
+	p$bxy2hat[i] <- get_effs(x2a, y2a, g1) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+}
+```
+
+```{r}
+ggplot(p, aes(x=bxy1/bxy2, y=bxy1hat/bxy2hat)) +
+geom_point()
+```
+
+```{r}
+ggplot(p, aes(x=bxy1/bxy2, y=bxy1hat/bxy2hat * yscale/xscale)) +
+geom_point()
+```
+
+
+The ratio of bxy1 and bxy2 represents the extent to which the effects are different. When bxy1a and bxy2a are on different scales, is there something we can do to transform them to give the same ratio as bxy1 and bxy2? The absolute effects don't need to be the same, but the ratio does in order to be able to compare them across studies.
+
+We can estimate the effect of x1 on x2 (bxx), and the effect of y1 on y2 (byy). Multiplying bxy1a and bxy2a by byy/bxx will make sure that they are each on the same scales.
+
+To do this in SEM we don't want to transform bxy, rather, we want to transform the genetic effects themselves. Because bxy = bgy/bgx, we can get the scale addjusted bxy effect by (bgy * byy) / (bgx * bxx).
+
+
+```{r}
+i <- 2
+x1 <- make_phen(b1, g1)
+x2 <- make_phen(b1, g1)
+y1 <- make_phen(c(p$bxy1[i], b2), cbind(x1, g2))
+y2 <- make_phen(c(p$bxy2[i], b2), cbind(x2, g2))
+
+x1a <- x1 * p$xvar1[i]
+x2a <- x2 * p$xvar2[i]
+y1a <- y1 * p$yvar1[i]
+y2a <- y2 * p$yvar2[i]
+
+xscale <- get_effs(x1a, x2a, g1) %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+	{.$b}
+
+yscale <- get_effs(y1a, y2a, g2) %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+	{.$b}
+
+
+dat1 <- get_effs(x1a, y1a, g1)
+dat2 <- get_effs(x2a, y2a, g1)
+
+dat1 %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+	{.$b}
+p$bxy1[i]
+
+dat2 %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+	{.$b}
+p$bxy2[i]
+```
+
+```{r}
+# Scale genetic effects before MR
+dat1a <- dat1
+dat1a$beta.exposure <- dat1a$beta.exposure * xscale
+dat1a$beta.outcome <- dat1a$beta.outcome * yscale
+dat1a$se.exposure <- dat1a$se.exposure * xscale
+dat1a$se.outcome <- dat1a$se.outcome * yscale
+dat1a %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+  {.$b}
+
+# Scale MR estimates
+get_effs(x1a, y1a, g1) %>%
+	subset(., pval.exposure < 5e-8) %>%
+	mr(., meth="mr_ivw") %>%
+	{.$b * yscale/xscale}
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+nsim <- 10
+p <- tibble(
+  	xvar1 = runif(nsim, 0.1, 10),
+  	xvar2 = runif(nsim, 0.1, 10),
+  	yvar1 = runif(nsim, 0.1, 10),
+  	yvar2 = runif(nsim, 0.1, 10),
+  	bxy1 = runif(nsim, 0.2, 0.6) * sample(c(1, -1), nsim, rep=T),
+  	bxy2 = runif(nsim, 0.2, 0.6) * sample(c(1, -1), nsim, rep=T),
+  	bxy1hat = NA,
+  	bxy2hat = NA,
+  	xscale = NA,
+  	yscale = NA
+  )
+nsnp <- 50
+nid <- 100000
+g1 <- make_geno(nid, nsnp, af=0.3)
+g2 <- make_geno(nid, nsnp, af=0.3)
+b1 <- choose_effects(nsnp, 0.3)
+b2 <- choose_effects(nsnp, 0.3)
+
+for(i in 1:(nsim))
+{
+	message(i)
+	x1 <- make_phen(b1, g1)
+	x2 <- make_phen(b1, g1)
+	y1 <- make_phen(c(p$bxy1[i], b2), cbind(x1, g2))
+	y2 <- make_phen(c(p$bxy2[i], b2), cbind(x2, g2))
+
+	x1a <- x1 * p$xvar1[i]
+	x2a <- x2 * p$xvar2[i]
+	y1a <- y1 * p$yvar1[i]
+	y2a <- y2 * p$yvar2[i]
+
+	# What if there is an effect of 
+	p$xscale[i] <- get_effs(x1a, x2a, g1) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+	p$yscale[i] <- get_effs(y1a, y2a, g2) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+
+	dat1 <- get_effs(x1a, y1a, g1)
+	dat2 <- get_effs(x2a, y2a, g1)
+	p$bxy1hata[i] <- dat1 %>%
+	  mutate(
+	    beta.exposure = beta.exposure * p$xscale[i],
+	    beta.outcome = beta.outcome * p$yscale[i],
+	    se.exposure = se.exposure * p$xscale[i],
+	    se.outcome = se.outcome * p$yscale[i]
+    ) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+	  {.$b}
+	
+	p$bxy1hatb[i] <- dat1 %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+	  {.$b}
+
+	p$bxy2hata[i] <- dat2 %>%
+	  mutate(
+	    beta.exposure = beta.exposure * p$xscale[i],
+	    beta.outcome = beta.outcome * p$yscale[i],
+	    se.exposure = se.exposure * p$xscale[i],
+	    se.outcome = se.outcome * p$yscale[i]
+    ) %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+		{.$b}
+
+	p$bxy2hatb[i] <- dat2 %>%
+		subset(., pval.exposure < 5e-8) %>%
+		mr(., meth="mr_ivw") %>%
+	  {.$b}
+}
+```
+
+```{r}
+ggplot(p, aes(x=bxy1/bxy2, y=bxy1hata/bxy2hatb)) +
+geom_point()
+```
+
+SO for SEM, we need to scale just one population e.g.
+
+bgx1a = bgx1 * byy / bxx
+segx1a = segx1 * byy / bxx
+
+
+
+
