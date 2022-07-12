@@ -1,0 +1,138 @@
+---
+title: "SBP scaling"
+output: html_notebook
+---
+
+Systolic blood pressure has two GWASs in EAS from BBJ. How comparable are these units, and also compared against UKBB European results
+
+```{r}
+library(TwoSampleMR)
+library(dplyr)
+library(ieugwasr)
+library(readr)
+library(ggplot2)
+```
+
+Read in list of cross-ancestry SNPs to use for SBP
+
+```{r}
+snps <- read.csv("~/Downloads/bbj_new_sumstat.csv")
+head(snps)
+```
+
+These are the two BBJ SBP GWASs
+
+```{r}
+gwasinfo(c("ieu-b-5075", "bbj-a-52")) %>% glimpse()
+```
+
+Relationship between these two BBJ datasets
+
+```{r}
+a <- extract_outcome_data(snps$rsid, "ieu-b-5075") %>% convert_outcome_to_exposure()
+b <- extract_outcome_data(snps$rsid, "bbj-a-52")
+dat <- harmonise_data(a,b)
+r <- mr(dat)
+r
+mr_scatter_plot(r, dat)
+```
+
+The simple mode gives a very good indication here that the units are the same in the two studies. However, there is a massive outlier introduced in the more recent one, which distorts the results for the other datasets
+
+Relationship between BBJ and UKBB-EUR
+
+```{r}
+c <- extract_outcome_data(snps$rsid, "ukb-b-20175")
+dat2 <- harmonise_data(a, c)
+res2 <- mr(dat2)
+res2
+mr_scatter_plot(res2, dat2)
+```
+Similar situation here where the simple mode gets it right, and the estimate suggests the scales are the same. But these massive outliers pose a problem
+
+```{r}
+c <- extract_outcome_data(snps$rsid, "ukb-b-20175")
+dat3 <- harmonise_data(b%>% convert_outcome_to_exposure(), c)
+res3 <- mr(dat3)
+res3
+mr_scatter_plot(res3, dat3)
+```
+
+Perform MR of SBP
+
+```{r}
+a <- extract_outcome_data(snps$rsid, c("ukb-b-20175", "bbj-a-52", "ieu-b-5075")) %>% convert_outcome_to_exposure()
+b <- extract_outcome_data(snps$rsid, c("ebi-a-GCST005195", "bbj-a-159"))
+dat <- harmonise_data(a, b)
+
+res <- mr(dat, method_list=c("mr_ivw"))
+ggplot(res, aes(x=b, y=id.outcome)) +
+  geom_errorbarh(aes(xmin=b - 1.96*se, xmax=b+1.96*se), height=0) +
+  geom_point(aes(colour=id.exposure)) +
+  facet_grid(id.exposure ~ .) + scale_colour_brewer(type="qual")
+```
+
+
+```{r}
+gendat <- function(snplist, x, y)
+{
+  a <- extract_outcome_data(snplist, x) %>% convert_outcome_to_exposure()
+  b <- extract_outcome_data(snplist, y)
+  dat <- harmonise_data(a, b)
+  return(dat)
+}
+
+d <- gendat(snps$rsid, "ieu-b-5075", "ebi-a-GCST005195")
+dr <- d %>% mr()
+dr
+mr_scatter_plot(dr, d)
+```
+
+```{r}
+d <- gendat(snps$rsid, "ieu-b-5075", "bbj-a-159")
+dr <- d %>% mr()
+dr
+mr_scatter_plot(dr, d)
+
+```
+
+That outlier SNP is just not present in BBJ's CAD.
+
+Check concordance of outcome datasets (note that don't have SNPs selected for multiple ancestries here)
+
+
+
+```{r}
+do1 <- make_dat("ebi-a-GCST005195", "bbj-a-159")
+r1 <- mr(do1)
+r1
+mr_scatter_plot(r1, do1)
+```
+
+```{r}
+do2 <- make_dat("bbj-a-159", "ebi-a-GCST005195")
+r2 <- mr(do2)
+r2
+mr_scatter_plot(r2, do2)
+```
+
+Using European instruments, there is a large effect in EUR that doesn't replicate in EAS. However the simple mode ignors this and gives a slope of ~1. Using EAS instruments gives two apparent clusters, one with large effects in EAS that are null in EAS. Those are likely due to LD. A visual inspection of the other cluster indicates a slope of ~1. I would not adjust this dataset.
+
+**Use the better powered GWAS as the exposure to reduce regression dilution bias**
+
+```{r}
+adjx <- gendat(snps$rsid, "ukb-b-20175", "bbj-a-52") 
+r <- mr(adjx)
+r
+mr_scatter_plot(r, adjx)
+```
+
+
+The effect appears to be quite convincingly attenuated by ~20% in BBJ
+
+
+
+
+
+
+
