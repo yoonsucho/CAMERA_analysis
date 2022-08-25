@@ -1,5 +1,5 @@
-Package: trans
-Title: MR-TRANS
+Package: CAMERA_analysis
+Title: CAMERA Analysis
 Version: 0.1.0
 Authors@R: c(person("Yoonsu", "Cho", email = "yoonsu.cho@bristol.ac.uk", role = c("aut")), person("Gibran", "Hemani", email = "g.hemani@bristol.ac.uk", role = c("aut", "cre")))
 Description: LATER.
