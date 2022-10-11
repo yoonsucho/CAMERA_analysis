@@ -1,0 +1,15 @@
+
+
+# 1. Get list of variants to analyse
+# 2. Split variants into groups
+# 3. 
+
+
+rule all:
+    input: 
+
+
+rule gwashits:
+    input:
+    output: "gwashits.rdata"
+
