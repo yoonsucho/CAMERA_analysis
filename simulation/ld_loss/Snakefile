@@ -1,15 +1,35 @@
 
 
+# 0. Download LD reference dataset
 # 1. Get list of variants to analyse
 # 2. Split variants into groups
 # 3. 
 
 
 rule all:
-    input: 
+    input:
+        "gwashits.rdata"
 
+
+rule download_ld_ref:
+    output:
+        "EUR.rdata"
+    shell:
+        """
+        wget http://fileserve.mrcieu.ac.uk/ld/1kg.v3.tgz
+        tar xzvf 1kg.v3.tgz
+        mv ld {datadir}
+        """
 
 rule gwashits:
+    output: 
+        "gwashits.rdata",
+        "region.txt"
+    script:
+        "gwashits.r"
+
+rule whole_genome_ld_loss:
     input:
-    output: "gwashits.rdata"
+        "gwashits.rdata"
+    output: 
 

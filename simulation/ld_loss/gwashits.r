@@ -33,5 +33,7 @@ gwashits <- gwashits %>%
         x
     })
 
+region <- subset(region, code %in% gwashits$code)
+
 save(gwashits, file=here("simulation/ld_loss/data","gwashits.rdata"))
 write.table(region, file=here("simulation/ld_loss/data", "region.txt"), row=F, col=F, qu=F)

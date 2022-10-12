@@ -13,8 +13,10 @@ regions <- regions[sample(1:nrow(regions), 10, replace=FALSE), ]
 mapEUR <- generate_ldobj(here("data", "ld", "ldEUR"), here("data", "ld", "EUR"), regions)
 mapEAS <- generate_ldobj(here("data", "ld", "ldEAS"), here("data", "ld", "EAS"), regions)
 mapAFR <- generate_ldobj(here("data", "ld", "ldAFR"), here("data", "ld", "AFR"), regions)
+mapSAS <- generate_ldobj(here("data", "ld", "ldSAS"), here("data", "ld", "SAS"), regions)
+mapAMR <- generate_ldobj(here("data", "ld", "ldAMR"), here("data", "ld", "AMR"), regions)
 
-save(mapEUR, mapEAS, mapAFR, file=here("data", "ld", "maps.rdata"))
+save(mapEUR, mapEAS, mapAFR, mapSAS, mapAMR, file=here("data", "ld", "maps.rdata"))
 
 outdir <- here("data", "ld", "ldEUR")
 bfile <- here("data", "ld", "EUR")

@@ -19,7 +19,7 @@ $$
 
 Alternatively, if the effect estimate is based on re-estimated $\beta_{gx}$ and $\beta_{gy}$ in the non-European population then even if there is incomplete LD that should cancel out. However, the larger the loss in LD the weaker the non-Eur IV will be, and similarly if there is ascertainment for more intermediate allele frequencies in Europeans then weaker IV in non-Eur.
 
-Questions
+## Questions
 
 1. What is the distribution of LD-loss for widely used European derived instruments?
     - Degree of bias in non-Eur
@@ -29,7 +29,7 @@ Questions
     - Loss of power in non-Eur
     - Are Eur instruments ascertained for differential LD regions?
 
-Methods
+## Methods
 
 Use 1000 genomes reference panel, LD and allele frequency info for 5 super populations.
 
@@ -38,7 +38,6 @@ Use 1000 genomes reference panel, LD and allele frequency info for 5 super popul
 3. For each SNP that has non-zero probability of being selected, what is the LD loss?
 4. Integrating over 2 and 3, what is the LD loss distribution for each SNP?
 
-
 ## Other simulations
 
 Need to organise the simulations that were performed.
@@ -46,5 +45,27 @@ Need to organise the simulations that were performed.
 1. Using maxz to improve instrument selection
 2. Using SEM to jointly estimate effects
 
-## To run
+## Coding notes
+
+- Using snakemake to pipeline the analysis
+- All analysis in R so using renv to control environment
+- Prototyping locally but distributing parallel code to bluecrystal4
+
+To run
+
+Setup `config.json` like:
+
+```
+{
+    "ld_data_dir": "somewhere",
+    "outdir": "somewhere"
+}
+```
+
+1. Install `snakemake`
+2. Install renv package and then restore using `renv::restore()`
+
+```
+snakemake
+```
 
