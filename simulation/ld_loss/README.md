@@ -55,7 +55,7 @@ To run
 
 Setup `config.json` like:
 
-```
+```json
 {
     "ld_data_dir": "somewhere",
     "outdir": "somewhere"

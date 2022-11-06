@@ -47,6 +47,11 @@ subset_ldobj <- function(ldobj, snps)
 }
 
 
+# 1. Generate a causal variant for pop1
+# 2. keep the region around the causal variant
+# 3. generate LD
+# 4. 
+
 simss <- function(ld1, ld2, nid1, nid2, type, hsq1, window, bxy1, bxy2)
 {
   x1p <- ld1$map %>%

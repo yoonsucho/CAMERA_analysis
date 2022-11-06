@@ -1,15 +1,20 @@
+# Need to get list of wildcards before running. Slightly annoying. Run
+# Rscript gwashits.r
+# before starting
 
-
-# 0. Download LD reference dataset
-# 1. Get list of variants to analyse
-# 2. Split variants into groups
-# 3. 
+import json
+import pandas as pd
+with open('config.json', 'r') as f:
+  config = json.load(f)
+datadir = config['ld_data_datadir']
+outdir = config['outdir']
+region = pd.read_csv("data/region.txt", header=None, sep=" ")
+regions = region['3'].to_list()
 
 
 rule all:
     input:
-        "gwashits.rdata"
-
+        "{outdir}/result.rdata"
 
 rule download_ld_ref:
     output:
@@ -17,19 +22,25 @@ rule download_ld_ref:
     shell:
         """
         wget http://fileserve.mrcieu.ac.uk/ld/1kg.v3.tgz
+        mv 1kg.v3.tgz {datadir}
+        cd {datadir}
         tar xzvf 1kg.v3.tgz
-        mv ld {datadir}
+        rm 1kg.v3.tgz
         """
-
-rule gwashits:
-    output: 
-        "gwashits.rdata",
-        "region.txt"
-    script:
-        "gwashits.r"
 
 rule whole_genome_ld_loss:
     input:
-        "gwashits.rdata"
-    output: 
+        "gwashits.rdata",
+        "EUR.bed"
+    output:
+        "{outdir}/{regions}/result.rdata"
+    shell:
+        "Rscript whole_genome_ld_loss {wildcards.regions}"
 
+rule aggregate:
+    input:
+        expand("{outdir}/{regions}/result.rdata", outdir=outdir, regions=regions)
+    output:
+        "{outdir}/result.rdata"
+    script:
+        "aggregate.r"
