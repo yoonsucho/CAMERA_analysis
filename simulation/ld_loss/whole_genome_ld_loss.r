@@ -5,28 +5,32 @@ library(jsonlite)
 
 main <- function()
 {
+  print("HELLOOO")
   ## Input
   config <- jsonlite::read_json("config.json")
   ld_data_dir <- config$ld_data_dir
   region_code <- commandArgs(T)[1]
   outdir <- file.path(config$outdir, region_code)
   dir.create(outdir, recursive=TRUE)
-  load(here("simulation/ld_loss/data","gwashits.rdata"))
-  gwashits <- subset(gwashits, code %in% region_code)
-  matched <- match_maf_ldscore()
   pops <- c("EUR", "EAS", "SAS", "AFR", "AMR")
   ldobjs <- generate_ldobjs(region_code, outdir, ld_data_dir, pops)
   tempmap <- ldobjs[["EUR"]]$map
   tempmap$ldscore <- colSums(ldobjs$EUR$ld^2)
+
+  load(here("simulation/ld_loss/data","gwashits.rdata"))
+  gwashits <- subset(gwashits, code %in% region_code & rsid %in% tempmap$snp)
   matched <- match_maf_ldscore(tempmap, gwashits$rsid) %>%
     left_join(., gwashits, by=c("target"="rsid")) %>%
     rename(rsid=matched)
   snplist <- bind_rows(gwashits, matched)
-  res <- lapply(1:nrow(snplist), function(i)
-    {
-      tophit_cross_ancestry_ld_loss_empirical(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs)[[2]]
-    }) %>% bind_rows() %>% mutate(region=region_code)
+  print(str(snplist))
+  res <- lapply(1:nrow(snplist), function(i) {
+    message(i)
+    print(snplist[i,] %>% str())
+    tophit_cross_ancestry_ld_loss_empirical(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs)[[2]]
+  }) %>% bind_rows() %>% mutate(region=region_code)
   save(snplist, res, file=file.path(outdir, "result.rdata"))
+  unlink(file.path(outdir, pops), recursive=TRUE)
 }
 
 # For a list of snps find SNPs that match on MAF and LD Score
@@ -60,7 +64,15 @@ generate_ldobjs <- function(region_code, outdir, ld_data_dir, pops = c("EUR", "E
     dplyr::as_tibble() %>%
     dplyr::filter(code == region_code)
 
-  maps <- lapply(pops, function(pop) generate_ldobj(file.path(outdir, pop), file.path(ld_data_dir, pop), region))
+  maps <- lapply(pops, function(pop)
+  {
+    if(!file.exists(file.path(outdir, pop, paste0("ldobj_", region$code, ".rds"))))
+    {
+      generate_ldobj(file.path(outdir, pop), file.path(ld_data_dir, pop), region)
+    } else {
+      readRDS(file.path(outdir, pop, "map.rds"))
+    }
+  })
   names(maps) <- pops
   save(maps, file=file.path(outdir, "maps.rdata"))
   ldobjs <- organise_ldobj(as.list(file.path(outdir, pops, paste0("ldobj_", region$code, ".rds"))), region$code)
@@ -164,21 +176,30 @@ tophit_cross_ancestry_ld_loss_empirical_error <- function(tempmap, snp, pval, nE
   return(list(tempmap, tib))
 }
 
-tophit_cross_ancestry_ld_loss_empirical <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1))
+tophit_cross_ancestry_ld_loss_empirical <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1), max_snps=2000)
 {
+  print(str(tempmap))
   set.seed(seed)
   causalsnp <- which(tempmap$snp == snp)
+  print(causalsnp)
   tempmap$causal <- 1:nrow(tempmap) == causalsnp
+  min_coord <- max(1, round(causalsnp - (max_snps/2)))
+  max_coord <- min(nrow(tempmap), round(causalsnp + (max_snps/2)))
+  message(min_coord, "-", max_coord)
+  tempmap <- tempmap[min_coord:max_coord,]
+  causalsnp <- which(tempmap$causal)
+  message("Number of SNPs: ", nrow(tempmap))
   # tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
   beta <- b_from_pafn(pval, tempmap$af[tempmap$causal], nEUR)
   tempmap$beta <- 0
   tempmap$beta[tempmap$causal] <- beta
   xvar <- tempmap$af * (1-tempmap$af) * 2
-  tempmap$beta_ld <- (diag(1/xvar) %*% ldobjs$EUR$ld %*% diag(xvar) %*% tempmap$beta) %>% drop()
-  tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
+  eurld <- subset_ldobj(ldobjs$EUR, tempmap$snp)
+  tempmap$beta_ld <- (diag(1/xvar) %*% eurld$ld %*% diag(xvar) %*% tempmap$beta) %>% drop()
+  tempmap$ld <- eurld$ld[causalsnp, ]
   #tempmap$beta_ld <- beta * sign(tempmap$ld) * tempmap$ld^2
   tempmap$se <- expected_se(tempmap$beta_ld, tempmap$af, nEUR, 1)
-  semat <- diag(tempmap$se) %*% ldobjs$EUR$ld %*% diag(tempmap$se)
+  semat <- diag(tempmap$se) %*% eurld$ld %*% diag(tempmap$se)
   bhat <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld, Sigma=semat)
   fval <- (t(bhat) / tempmap$se)^2
   topsnp <- tempmap$snp[apply(fval, 2, function(x) which.max(x))]

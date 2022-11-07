@@ -580,15 +580,15 @@
     },
     "genetics.binaRies": {
       "Package": "genetics.binaRies",
-      "Version": "0.0.0.9000",
+      "Version": "0.1.0",
       "Source": "GitHub",
       "RemoteType": "github",
       "RemoteHost": "api.github.com",
-      "RemoteRepo": "genetics.binaRies",
-      "RemoteUsername": "explodecomputer",
-      "RemoteRef": "HEAD",
-      "RemoteSha": "929ce77f2a8db6af26e8819d011a1f051bc6cb15",
-      "Hash": "3863fee3fbf5af84e0cb3706ee7077ea",
+      "RemoteUsername": "MRCIEU",
+      "RemoteRepo": "genetics.binaries",
+      "RemoteRef": "master",
+      "RemoteSha": "a63ef35707d0848f32bc4748346663bf512d5c97",
+      "Hash": "0fc471aff56a1fda2f2bc7ca23278eeb",
       "Requirements": []
     },
     "ggplot2": {

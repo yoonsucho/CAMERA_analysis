@@ -6,15 +6,16 @@ import json
 import pandas as pd
 with open('config.json', 'r') as f:
   config = json.load(f)
-datadir = config['ld_data_datadir']
+
+datadir = config['ld_data_dir']
 outdir = config['outdir']
 region = pd.read_csv("data/region.txt", header=None, sep=" ")
-regions = region['3'].to_list()
+regions = list(region[3])
 
 
 rule all:
     input:
-        "{outdir}/result.rdata"
+        expand("{outdir}/result.rdata", outdir=outdir)
 
 rule download_ld_ref:
     output:
@@ -30,12 +31,12 @@ rule download_ld_ref:
 
 rule whole_genome_ld_loss:
     input:
-        "gwashits.rdata",
-        "EUR.bed"
+        "data/gwashits.rdata",
+        expand("{datadir}/EUR.bed", datadir=datadir)
     output:
         "{outdir}/{regions}/result.rdata"
     shell:
-        "Rscript whole_genome_ld_loss {wildcards.regions}"
+        "Rscript whole_genome_ld_loss.r {wildcards.regions}"
 
 rule aggregate:
     input:

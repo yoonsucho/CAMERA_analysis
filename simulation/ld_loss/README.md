@@ -69,3 +69,21 @@ Setup `config.json` like:
 snakemake
 ```
 
+On bc4
+
+```
+snakemake -prk \
+-j 100 \
+--cluster-config bc4-cluster.json \
+--cluster "sbatch \
+  --job-name={cluster.name} \
+  --partition={cluster.partition} \
+  --nodes={cluster.nodes} \
+  --ntasks-per-node={cluster.ntask} \
+  --cpus-per-task={cluster.ncpu} \
+  --time={cluster.time} \
+  --mem={cluster.mem} \
+  --output={cluster.output}"
+```
+
+
