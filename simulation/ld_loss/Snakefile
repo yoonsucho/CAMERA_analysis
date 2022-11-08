@@ -15,7 +15,7 @@ regions = list(region[3])
 
 rule all:
     input:
-        expand("{outdir}/result.rdata", outdir=outdir)
+        expand("{outdir}/results.rdata", outdir=outdir)
 
 rule download_ld_ref:
     output:
@@ -42,6 +42,6 @@ rule aggregate:
     input:
         expand("{outdir}/{regions}/result.rdata", outdir=outdir, regions=regions)
     output:
-        "{outdir}/result.rdata"
+        "{outdir}/results.rdata"
     script:
         "aggregate.r"
