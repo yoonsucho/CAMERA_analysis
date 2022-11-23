@@ -1,0 +1,599 @@
+---
+title: "Initial analysis of LD loss simulations
+author: "Gibran Hemani"
+date: `r Sys.Date()`
+---
+
+LD loss analysis asks
+
+Simulations:
+
+1. For a causal variant being discovered in European datasets, what are the possible top GWAS hits
+2. What is the probability of each SNP being top hit in the region
+3. What is the average expected LD between causal variant and European-discovered top hit in non-Europeans
+4. What is the difference in allele frequencies between Eur and non-Eur for the Eur top hit
+
+Analysis:
+
+5. Are the known GWAS hits giving a different cross-population result from other LD/MAF matched SNPs
+6. What is expected influence on MR
+  - Using European bgx against non-European bgy
+  - Using re-estimated bgx against bgy in non-Europeans
+  - Consider bias due to LD, weak instrument bias, power
+
+
+```{r}
+library(here)
+renv::activate(here(".."))
+library(dplyr)
+library(ggplot2)
+library(lmerTest)
+library(lme4)
+library(simulateGP)
+```
+
+```{r}
+load(here("../output_set1/results.rdata"))
+# remove duplicate SNPs
+
+res <- res[!duplicated(paste(res$snp, res$pop, res$pval)),]
+all(table(paste(res$snp, res$pval)) == 5)
+dim(res)
+```
+
+LD loss
+
+```{r}
+res %>% 
+  mutate(pvalbin = cut(-log10(pval), 5), nbin=cut(n, 5)) %>%
+  ggplot(., aes(y=r2, x=pop)) +
+  geom_boxplot() +
+  facet_grid(nbin ~ pvalbin)
+```
+
+The sample size doesn't have much impact on the decay of LD. But the discovery p-value has a big impact it seems - at least on an absolute scale
+
+```{r}
+res %>% 
+  mutate(pvalbin = cut(-log10(pval), 5), nbin=cut(n, 5)) %>%
+  ggplot(., aes(y=r2, x=pvalbin)) +
+  geom_boxplot(aes(fill=pop)) +
+  scale_fill_brewer(type="qual")
+```
+
+What about relative LD loss compared to EUR?
+```{r}
+res <- res %>%
+  group_by(snp, pval) %>%
+  mutate(r2_rel = r2/r2[pop=="EUR"])
+
+res %>%
+  group_by(pop) %>%
+  summarise(r2_rel=mean(r2_rel))
+```
+
+
+```{r}
+res$pvalbin <- cut(-log10(res$pval), 10)
+res %>% 
+  ggplot(., aes(y=r2_rel, x=pvalbin)) +
+    geom_boxplot(aes(fill=pop)) +
+    scale_fill_brewer(type="qual")
+```
+
+```{r}
+res %>% 
+  group_by(pop, pvalbin) %>%
+  summarise(r2_rel=mean(r2_rel)) %>%
+  ggplot(., aes(x=pvalbin, y=r2_rel, group=pop)) +
+  geom_line(aes(colour=pop))
+```
+
+It seems like the reduction in r2 is related to p-value even when looking at relative reduction.
+
+Let's look at allele frequency differences now
+
+```{r}
+res$maf <- res$af
+res$maf[res$maf > 0.5] <- 1 - res$maf[res$maf > 0.5]
+ggplot(res, aes(x=maf)) +
+  geom_histogram() +
+  facet_wrap(~ pop)
+```
+
+```{r}
+res %>%
+  group_by(pop) %>%
+  summarise(varsnp=mean(2*maf*(1-maf)))
+```
+
+How does allele frequency change with pval
+
+```{r}
+res %>% 
+  group_by(pop, pvalbin) %>%
+  summarise(maf=mean(maf)) %>%
+  ggplot(., aes(x=pvalbin, y=2*maf*(1-maf), group=pop)) +
+  geom_line(aes(colour=pop))
+res$pvalbin <- cut(-log10(res$pval), 10)
+res %>% 
+  ggplot(., aes(y=maf, x=pvalbin)) +
+    geom_boxplot(aes(fill=pop)) +
+    scale_fill_brewer(type="qual")
+```
+
+
+```{r}
+summary(lm(maf ~ I(-log10(pval)) * pop, res))
+```
+
+Generally the MAF in non-Europeans is lower than discovery variants in Europeans. There is a relationship of higher MAF with larger p-value as expected.
+
+Are the non-GWAS hit SNPs behaving differently in some way? 
+
+```{r}
+temp <- snplist %>%
+  ungroup %>%
+  select(rsid, p, target) %>%
+  filter(!duplicated(paste(rsid, p))) %>%
+  mutate(
+    type = case_when(is.na(target) ~ "gwas", TRUE ~ "control")
+  )
+temp
+# For simplicity just remove any control SNPs that are also gwas hits
+temp2 <- subset(temp, type=="control")
+rem <- temp2 %>% subset(rsid %in% subset(temp, type=="gwas")$rsid) %>% {.$rsid}
+temp <- subset(temp, ! (rsid %in% rem & type=="control"))
+temp
+```
+
+For every gwashit get the r2 and the average r2 for the control SNPs
+
+```{r}
+res$rsidcode <- paste(res$snp, res$pval)
+temp$rsidcode <- paste(temp$rsid, temp$p)
+x <- subset(temp, target == temp$rsid[1])
+
+gwas_control <- temp %>% 
+  filter(type == "control") %>% 
+  group_by(target) %>%
+  do({
+    x <- .
+    controlid <- x$rsidcode
+    target <- paste(x$target[1], x$p[1])
+    restemp <- subset(res, rsidcode %in% controlid) %>% 
+      group_by(pop) %>%
+      summarise(r2 = mean(r2), maf=mean(maf))
+    tartemp <- subset(res, rsidcode == target)
+    tibble(
+      target = target,
+      pop = c(tartemp$pop, restemp$pop),
+      r2 = c(tartemp$r2, restemp$r2),
+      maf = c(tartemp$maf, restemp$maf),
+      what=rep(c("gwas", "control"), each=5)
+    )
+  })
+gwas_control
+```
+```{r}
+gwas_control %>%
+  group_by(target, pop) %>%
+  summarise(
+    r2 = r2[what=="gwas"] - r2[what=="control"],
+    maf = maf[what=="gwas"] - maf[what=="control"]
+  ) %>%
+  group_by(pop) %>%
+  summarise(r2_mean=mean(r2), r2_se=sd(r2)/sqrt(n()), r2_p=pnorm(abs(r2_mean)/r2_se, low=F), maf_mean=mean(maf), maf_se=sd(maf)/sqrt(n()), maf_p=pnorm(abs(maf_mean)/maf_se, low=F))
+```
+
+The GWAS hits seem to have smaller LD decay than control SNPs. 
+
+```{r}
+gwas_control %>%
+  group_by(target, pop) %>%
+  summarise(
+    r2 = r2[what=="gwas"] - r2[what=="control"],
+    maf = maf[what=="gwas"] - maf[what=="control"]
+  ) %>%
+  group_by(pop) %>%
+  left_join(., temp, by=c("target"="rsidcode")) %>%
+  ggplot(., aes(x=-log10(p), y=r2)) +
+#    geom_point(aes(colour=pop)) +
+    geom_smooth(aes(colour=pop)) +
+    scale_color_brewer(type="qual")
+```
+
+Insufficient power to notice a relationship with discovery p-value
+
+```{r}
+gwas_control %>%
+  ggplot(., aes(x=pop, y=r2)) +
+  geom_boxplot(aes(fill=what))
+```
+
+Visualisation that for each population, the LD decay for control SNPs seems to be larger than for known GWAS hits
+
+```{r}
+lmerTest::lmer(r2 ~ what + (1|pop), gwas_control) %>% summary()
+#lme4::lmer(r2 ~ what + (1|pop), gwas_control) %>% summary()
+
+```
+
+## Influence on MR
+
+
+### Genetic interactions
+
+The ways in which change in LD and MAF can impact MR will differ based on how the MR is being performed. 
+
+$$
+\beta_{gy}^{AFR} / \beta_{gx}^{EUR} = \beta_{IV}R^2
+$$
+Core assumption for 2-sample MR is that causal structure in sample 1 is the same as in sample 2. However if the causal structure really is the same then 
+
+Difference in MAF could have an impact on genetic interactions, which in turn lead to differences in effects across populations.
+
+If the effect of x on y is estimated using $\beta_{IV} = \beta_{gy}/\beta_{gx}$, then genetic or environmental interactions can modulate $\hat{\beta}_{gx}$ estimates as the allele frequencies change. For example
+
+$$
+x = a + \beta_{gx} G + \beta_2 G_2 + \beta_{int} GG_2 + e
+$$
+
+What is the expected association of x on G?
+
+$$
+\begin{aligned}
+\hat{\beta}_{gx} &= cov(G, X)/Var(G) \\
+&= cov(G, \beta_{gx}G + \beta_{int}GG_2)/Var(G) \\
+&= \frac{\beta_{gx}Var(G) + 2p_2\beta_{int}Var(G)}{Var(G)} \\
+&= \beta_{gx} + 2p_2\beta_{int}
+\end{aligned}
+$$
+
+```{r}
+sim_system <- function(n, af1, rho1, af2, rho2, b1, b2, bint)
+{
+  args <- environment() %>% as.list() %>% as_tibble()
+  g1 <- simulateGP::correlated_binomial(n, af1, af1, rho1)
+  g2 <- simulateGP::correlated_binomial(n, af2, af2, rho2)
+  x <- g1[,1] * b1 + g2[,1] * b2 + g1[,1]*g2[,1]*bint
+  bind_rows(
+    tibble(
+      coef=c(1,2),
+      est=c(lm(x ~ g1[,1])$coef[2], lm(x ~ g2[,1])$coef[2]),
+      ld="causal"
+    ),
+    tibble(
+      coef=c(1,2),
+      est=c(lm(x ~ g1[,2])$coef[2], lm(x ~ g2[,2])$coef[2]),
+      ld="non-causal"
+    )
+  ) %>% bind_cols(., args) %>% return()
+}
+
+param <- expand.grid(af1=seq(0.1,0.9,by=0.1), af2=seq(0.1,0.9,by=0.1), n=1000, b1=1, b2=1, bint=c(0,1,2), rho1=0.8, rho2=0.8)
+out <- lapply(1:nrow(param), function(i) do.call(sim_system, param[i,])) %>% bind_rows()
+out %>% filter(bint == 2) %>%
+  ggplot(., aes(x=af1, y=est, groups=as.factor(af2))) +
+    geom_point(aes(colour=af2)) +
+    geom_line(aes(colour=af2)) +
+    facet_grid(ld ~ coef)
+```
+
+Effect of SNP1 depends on allele frequency of SNP2 and vice versa. When there is also imperfect LD this leads to the interaction effect being attenuated
+
+Expected effect estimate of b_gx when it interacts with G2
+
+$$
+\begin{aligned}
+\beta_{gx} &= cov(G,X)/var(G) \\
+&= cov(G,\beta_{gx}G+\beta_{int}GG_2) /var(G) \\
+&= \beta_{gx} + 2p_2\beta_{int}
+\end{aligned}
+$$
+
+Check
+
+```{r}
+# cov(g1g2b1, g1)
+g1 <- rbinom(10000, 2, 0.3)
+g2 <- rbinom(10000, 2, 0.9)
+b1 <- 0.5
+cov(g1, g1*g2*b1)
+b1*cov(g1*g2,g1)
+b1*mean(g2)*var(g1)
+x <- g1 + g2 + g1*g2*0.3
+summary(lm(x ~ g1))
+0.3*mean(g2)+1
+```
+
+Now what if we don't have the causal variant, tagging variant $G^*$ is correlated with causal variant by $\rho$
+
+$$
+\begin{aligned}
+\beta_{G^*X} &= cov(G^*,X) / var(G^*)\\
+&= cov(G^*, \beta_{GX}G+\beta_{int}GG_2)  / var(G^*)\\
+&= [\beta_{GX}cov(G^*G) + 2p_2\beta_{int}cov(G^*G) ] / var(G^*) \\
+&= [\rho var(G^*)\beta_{GX} + 2\rho p_2 var(G^*)\beta_{int}]  / var(G^*) \\
+&= \rho\beta_{GX} + 2p_2 \rho \beta_{int}
+\end{aligned}
+$$
+
+Check it here
+
+```{r}
+p1 <- 0.04
+p2 <- 0.1
+rho <- sqrt(0.2)
+g1 <- correlated_binomial(n, p1, p1, rho)
+g2 <- correlated_binomial(n, p2, p2, rho)
+x <- g1[,1] + g2[,1] + g1[,1]*g2[,1]
+
+cov(g1[,1], x)
+var(g1[,1]) + var(g1[,1])*mean(g2[,1])
+
+cov(g1[,2], x)
+cov(g1[,2], g1[,1] + g1[,1]*g2[,1])
+cov(g1[,2], g1[,1]) + cov(g1[,2], g1[,1]*g2[,1])
+cov(g1[,2], g1[,1]) + mean(g2[,1])*cov(g1[,2], g1[,1])
+rho * 2*p1*(1-p1) + 2*p2*2*p1*(1-p1)*rho
+
+lm(x ~ g1[,2])$coef[2]
+rho + 2*p2*rho
+
+```
+
+
+So the difference in $\beta_{gx}$ across populations A and B will depend on a) the difference in frequencies across populations and b) the magnitude of $\beta_{int}$
+
+$$
+\hat{\beta}_{gx}^A - \hat{\beta}_{gx}^B = 2\beta_{int}(p_2^A-p_2^B)
+$$
+
+Note that the LD of tagging variants could modify the $\beta_{gx}$ difference
+
+$$
+\begin{aligned}
+
+\hat{\beta}_{gx}^A - \hat{\beta}_{gx}^B &= \rho^A\beta_{GX} + 2p^A_2 \rho^A \beta_{int} - \rho^B\beta_{GX} - 2p^B_2 \rho^B \beta_{int} \\
+&= \beta_{GX}(\rho^A - \rho^B) + 2\beta_{int}(\rho^A p_2^A - \rho^B p_2^B)
+\end{aligned}
+$$
+
+Check this
+
+```{r}
+param <- expand.grid(n=10000, pA=seq(0.1,0.9,by=0.1), pB=seq(0.1,0.9,by=0.1), rho=c(0.999, 0.75, 0.5))
+sim <- function(n, pA, pB, rho)
+{
+  args <- environment() %>% as.list() %>% as_tibble()
+  gA1 <- correlated_binomial(n, 0.5, 0.5, rho)
+  gA2 <- correlated_binomial(n, pA, pA, rho)
+  gB1 <- correlated_binomial(n, 0.5, 0.5, rho)
+  gB2 <- correlated_binomial(n, pB, pB, rho)
+  xA <- gA1[,1] + gA2[,1] + gA1[,1] * gA2[,1]
+  xB <- gB1[,1] + gB2[,1] + gB1[,1] * gB2[,1]
+  
+  yA <- xA + rnorm(n)
+  yB <- xB + rnorm(n)
+  
+  # In pop1 use the causal variant, in pop2 the correlated
+  out <- list()
+  out$bgxA <- lm(xA ~ gA1[,1])$coef[2]
+  out$bgyA <- lm(yA ~ gA1[,1])$coef[2]
+  
+  out$bgxB <- lm(xB ~ gB1[,2])$coef[2]
+  out$bgyB <- lm(yB ~ gB1[,2])$coef[2]
+  out$bgyB_d <- lm(yB ~ gB1[,1])$coef[2]
+  
+  out$bivA <-  out$bgyA / out$bgxA
+  out$bivB <-  out$bgyB / out$bgxB
+  out$bivB_d <-  out$bgyB_d / out$bgxB
+  return(out %>% as_tibble() %>% bind_cols(args, .))
+}
+out2 <- lapply(1:nrow(param), function(i) do.call(sim, param[i,])) %>% bind_rows()
+plot(bivA ~ bivB, out2)
+
+out2 %>%
+  mutate(
+    bgxa_b = bgxA - bgxB,
+    exp_bgxa_b = rho + 2*(pA-rho*pB)
+  ) %>%
+  filter(rho == 0.5) %>%
+  {plot(exp_bgxa_b ~ bgxa_b, .)}
+```
+
+Note that the LD of tagging variants shouldn't have an impact here for the MR estimate - it will just cancel out
+
+```{r}
+n <- 100000
+g1 <- correlated_binomial(n, 0.8,0.8, rho=0.5)
+g2 <- correlated_binomial(n, 0.3,0.3, rho=0.5)
+x <- g1[,1] + g2[,1] + g1[,1]*g2[,1]
+y <- x + rnorm(n)
+
+library(systemfit)
+# Using causal variant as instrument
+systemfit(y ~ x, method="2SLS", inst=~g1[,1])
+# Using correlated variant as instrument
+systemfit(y ~ x, method="2SLS", inst=~g1[,2])
+```
+
+From a cross ancestry perspective what this means is that if you use European instruments then they will have a different allele frequency and R2 in the non-European sample.
+
+Scenario 1 - $\beta_{gy}^{AFR} / \beta_{gx}^{EUR}$
+
+- LD differences 
+- Allele frequency differences at interacting loci
+- Weak instrument bias due to LD and allele frequency differences
+
+$$
+\begin{aligned}
+\beta_{IV}^A &= \beta_{gy} / \beta_{gx}^A \\
+&= \frac{\beta_{gy}}{\beta_{gx}\rho^2 + 2\beta_{int}\rho^4(p_2^A-p_2^B)} \\
+\end{aligned}
+$$
+
+Scenario 2 - $\beta_{gy}^{AFR} / \beta_{gx}^{AFR}$ using g identified in Europeans
+
+- Weak instrument bias due to LD and allele frequency differences
+
+Scenario 3 - $\beta_{gy}^{AFR} / \beta_{gx}^{AFR}$ after multi-ancestry variant selection
+
+
+### Weak instrument bias
+
+Weak instrument bias is approximately $1/F$ where the F statistic is
+
+$$
+\begin{aligned}
+F &= \frac{R_{gx}^2(n-2)}{(1-R_{gx}^2)} \\
+&= \frac{2p(1-p)\beta_{gx}^2 \rho^2/Var(y)(n-2)}{1-2p(1-p)\beta_{gx}^2\rho^2/Var(y)}
+\end{aligned}
+$$
+
+So an F statistic of 10 would lead to a weak instrument bias of 10%. When going from one population to another the instrument strength will change due to 
+
+- reduced LD 
+- lower allele frequency
+- likely lower sample size
+- no winner's curse
+
+So the difference in F statistics will be
+
+$$
+\begin{aligned}
+F_A - F_B &= \frac{2p_A(1-p_A)\beta_{gx}^2 \rho_A^2/Var(y_A)(n-2)}{1-2p_A(1-p_A)\beta_{gx}^2\rho_A^2/Var(y_A)} - \frac{2p_B(1-p_B)\beta_{gx}^2 \rho_B^2/Var(y_B)(n-2)}{1-2p_B(1-p_B)\beta_{gx}^2\rho_B^2/Var(y_B)}\\
+\end{aligned}
+$$
+
+or the ratio of F statistics
+
+$$
+\begin{aligned}
+\frac{F_A}{F_B} &= \frac{\frac{2p_A(1-p_A)\beta_{gx}^2 \rho_A^2/Var(y_A)(n_A-2)}{1-2p_A(1-p_A)\beta_{gx}^2\rho_A^2/Var(y_A)}} {\frac{2p_B(1-p_B)\beta_{gx}^2 \rho_B^2/Var(y_B)(n_B-2)}{1-2p_B(1-p_B)\beta_{gx}^2\rho_B^2/Var(y_B)}}\\
+\end{aligned}
+$$
+
+For a set of European discovery hits, get a distribution of change in R2 and change in allele frequency per population. 
+
+```{r}
+res_eur <- subset(res, pop=="EUR") %>%
+  mutate(
+    rsq = TwoSampleMR::get_r_from_pn(pval, n)^2,
+    beta = sqrt(rsq / (2*maf*(1-maf))/r2),
+    Fstat = rsq * (n-2)/(1-rsq)
+  )
+res_eur %>%
+  plot(Fstat ~ I(-log10(pval)), .)
+
+res2 <- left_join(res, dplyr::select(ungroup(res_eur), rsidcode, beta), by="rsidcode") %>%
+  mutate(
+    rsq = beta^2 * r2 * 2 * maf * (1-maf)
+  )
+glimpse(res2)
+```
+
+Analysis
+
+```{r}
+res_eur <- subset(res2, pop=="EUR")
+ratios <- lapply(c("EAS", "AFR", "SAS", "AMR"), function(p)
+  {
+    res_pop <- subset(res2, pop == p) %>% left_join(., res_eur, by="rsidcode") %>%
+      mutate(
+        rsq_ratio = rsq.x/rsq.y,
+        Fstat_ratio = (rsq.x/(1-rsq.x))/(rsq.y/(1-rsq.y))
+      ) %>%
+      dplyr::select(rsidcode, n=n.x, rsq_ratio, Fstat_ratio, rsq_eur=rsq.y, rsq_noneur=rsq.x) %>%
+      mutate(pop=p)
+}) %>% bind_rows()
+ratios
+```
+
+```{r}
+summary(ratios$Fstat_ratio)
+```
+
+```{r}
+subset(ratios, Fstat_ratio > 20)
+```
+
+
+```{r}
+ratios %>%
+  filter(Fstat_ratio > quantile(Fstat_ratio, 0.05) & Fstat_ratio < quantile(Fstat_ratio, 0.95)) %>%
+  ggplot(., aes(y=Fstat_ratio, x=pop)) +
+    geom_violin() +
+    scale_y_log10()
+```
+
+
+```{r}
+str(out2)
+```
+
+$$
+\beta_{IV} = \beta_{gy}/\beta_{gx}
+$$
+
+So 
+
+```{r}
+param <- expand.grid()
+```
+
+
+$$
+\begin{aligned}
+var(GG_2) &= E[G_2]^2Var(G) + E[G]^2Var(G_2) + Var(G)Var(G_1) \\
+          &= (2p_1)^2(2p(1-p)) + (2p)^2(2p_1(1-p_1)) + (2p(1-p))(2p_1(1-p_1)) \\
+          &= 8p_1^2p(1-p) + 8p^2p_1(1-p_1) + 4p(1-p)p_1(1-p_1)
+\end{aligned}
+$$
+
+Check $Var(G_1 G_2)$
+
+```{r}
+fn <- function(p1, p2, n=10000)
+{
+  g1 <- rbinom(10000, 2, p1)
+  g2 <- rbinom(10000, 2, p2)
+  a=8*p2^2*p1*(1-p1) + 8*p1^2*p2*(1-p2) + 4*p1*(1-p1)*p2*(1-p2)
+  b=var(g1*g2)
+  return(c(a,b))
+}
+expand.grid(p1=seq(0.1,0.9,by=0.1), p2=seq(0.1,0.9,by=0.1)) %>%
+  {sapply(1:nrow(.), function(i) do.call(fn, .[i,]))} %>%
+  t() %>%
+  plot
+```
+
+
+
+Difference in MAF and LD can have an impact on power
+
+
+Difference in MAF and LD can have an impact on weak instrument bias
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
