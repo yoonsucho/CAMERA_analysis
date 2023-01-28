@@ -81,6 +81,8 @@ res %>%
     scale_fill_brewer(type="qual")
 ```
 
+Plot relative LD decay by P-value for each population
+
 ```{r}
 res %>% 
   group_by(pop, pvalbin) %>%
@@ -89,7 +91,11 @@ res %>%
   geom_line(aes(colour=pop))
 ```
 
-It seems like the reduction in r2 is related to p-value even when looking at relative reduction.
+It seems like the reduction in r2 is related to p-value even when looking at relative reduction. So what is important - relative LD decay or absolute LD decay? 
+
+Small sample size - Europeans have a chance of low LD, and AFR variant could be very low.
+Large sample size - Europeans more likely high LD, makes AFR LD closer, but the relative decay is still a problem.
+So if instrumenting using EUR exp and testing AFR outcome, as sample size increases the absolute difference in LD is going to be better.
 
 Let's look at allele frequency differences now
 
@@ -100,6 +106,8 @@ ggplot(res, aes(x=maf)) +
   geom_histogram() +
   facet_wrap(~ pop)
 ```
+
+European shows ascertainment for common variants. The corresponding allele frequency in AMR and SAS seems to match somewhat (surprising) but the AFR and EAS dist is much more uniform - many discovered common EUR variants will be rare in EAS and AFR - reduces power, increase weak instrument bias
 
 ```{r}
 res %>%
@@ -117,14 +125,41 @@ res %>%
   geom_line(aes(colour=pop))
 res$pvalbin <- cut(-log10(res$pval), 10)
 res %>% 
-  ggplot(., aes(y=maf, x=pvalbin)) +
+  ggplot(., aes(y=2*maf*(1-maf), x=pvalbin)) +
     geom_boxplot(aes(fill=pop)) +
     scale_fill_brewer(type="qual")
 ```
 
+No obvious relationship with MAF and pval
 
 ```{r}
 summary(lm(maf ~ I(-log10(pval)) * pop, res))
+```
+
+```{r}
+res %>% 
+  ggplot(., aes(y=2*maf*(1-maf), x=pop)) +
+    geom_boxplot(aes(fill=pop)) +
+    scale_fill_brewer(type="qual")
+```
+
+```{r}
+left_join(subset(res, pop != "EUR", select=c(rsidcode, maf, pop)), subset(res, pop == "EUR", select=c(rsidcode, maf)), by="rsidcode") %>%
+  mutate(gvar.x=2*maf.x*(1-maf.x), gvar.y=2*maf.y*(1-maf.y)) %>%
+  ggplot(., aes(x=gvar.y, y=gvar.x)) +
+  geom_point() + 
+  geom_smooth() +
+  facet_wrap(~ pop) +
+  labs(x="European var(SNP)", y="non-European var(SNP)")
+```
+
+```{r}
+left_join(subset(res, pop != "EUR", select=c(rsidcode, maf, pop)), subset(res, pop == "EUR", select=c(rsidcode, maf)), by="rsidcode") %>%
+  mutate(gvar.x=2*maf.x*(1-maf.x), gvar.y=2*maf.y*(1-maf.y)) %>%
+  group_by(pop) %>%
+  do({
+    summary(lm(gvar.x ~ gvar.y, .))$coef %>% as_tibble() %>% slice(n=2)
+  })
 ```
 
 Generally the MAF in non-Europeans is lower than discovery variants in Europeans. There is a relationship of higher MAF with larger p-value as expected.
@@ -175,6 +210,7 @@ gwas_control <- temp %>%
   })
 gwas_control
 ```
+
 ```{r}
 gwas_control %>%
   group_by(target, pop) %>%
@@ -186,7 +222,7 @@ gwas_control %>%
   summarise(r2_mean=mean(r2), r2_se=sd(r2)/sqrt(n()), r2_p=pnorm(abs(r2_mean)/r2_se, low=F), maf_mean=mean(maf), maf_se=sd(maf)/sqrt(n()), maf_p=pnorm(abs(maf_mean)/maf_se, low=F))
 ```
 
-The GWAS hits seem to have smaller LD decay than control SNPs. 
+The GWAS hits seem to have smaller LD decay than control SNPs in Africans. 
 
 ```{r}
 gwas_control %>%
@@ -229,7 +265,7 @@ The ways in which change in LD and MAF can impact MR will differ based on how th
 $$
 \beta_{gy}^{AFR} / \beta_{gx}^{EUR} = \beta_{IV}R^2
 $$
-Core assumption for 2-sample MR is that causal structure in sample 1 is the same as in sample 2. However if the causal structure really is the same then 
+Core assumption for 2-sample MR is that causal structure in sample 1 is the same as in sample 2. However if the causal structure really is the same then LD differences could introduce biased effects if we don't have causal variants.
 
 Difference in MAF could have an impact on genetic interactions, which in turn lead to differences in effects across populations.
 
@@ -259,12 +295,12 @@ sim_system <- function(n, af1, rho1, af2, rho2, b1, b2, bint)
   x <- g1[,1] * b1 + g2[,1] * b2 + g1[,1]*g2[,1]*bint
   bind_rows(
     tibble(
-      coef=c(1,2),
+      coef=paste("SNP", c(1,2)),
       est=c(lm(x ~ g1[,1])$coef[2], lm(x ~ g2[,1])$coef[2]),
       ld="causal"
     ),
     tibble(
-      coef=c(1,2),
+      coef=paste("SNP", c(1,2)),
       est=c(lm(x ~ g1[,2])$coef[2], lm(x ~ g2[,2])$coef[2]),
       ld="non-causal"
     )
@@ -322,7 +358,8 @@ $$
 Check it here
 
 ```{r}
-p1 <- 0.04
+n <- 10000
+p1 <- 0.1
 p2 <- 0.1
 rho <- sqrt(0.2)
 g1 <- correlated_binomial(n, p1, p1, rho)
@@ -434,6 +471,13 @@ $$
 \end{aligned}
 $$
 
+$$
+\begin{aligned}
+\hat{\beta}_{IV*} &= \frac{\beta_{gy}^{AFR}}{\beta_{gx}^{EUR}} \\
+&= \frac{\beta_{IV}(\rho\beta_{GX} + 2p_2 \rho \beta_{int})}{\beta_{gx}^{EUR}}
+\end{aligned}
+$$
+
 Scenario 2 - $\beta_{gy}^{AFR} / \beta_{gx}^{AFR}$ using g identified in Europeans
 
 - Weak instrument bias due to LD and allele frequency differences
@@ -519,14 +563,19 @@ summary(ratios$Fstat_ratio)
 subset(ratios, Fstat_ratio > 20)
 ```
 
+## Difference in MAF and LD can have an impact on power
+
+For equal sample size. How is power determined? Relates to R2 and sample size... Expected SE in exposure and outcome
+
 
 ```{r}
 ratios %>%
-  filter(Fstat_ratio > quantile(Fstat_ratio, 0.05) & Fstat_ratio < quantile(Fstat_ratio, 0.95)) %>%
-  ggplot(., aes(y=Fstat_ratio, x=pop)) +
+  filter(rsq_ratio > quantile(rsq_ratio, 0.05) & rsq_ratio < quantile(rsq_ratio, 0.95)) %>%
+  ggplot(., aes(y=rsq_ratio, x=pop)) +
     geom_violin() +
     scale_y_log10()
 ```
+
 
 
 ```{r}
@@ -571,15 +620,200 @@ expand.grid(p1=seq(0.1,0.9,by=0.1), p2=seq(0.1,0.9,by=0.1)) %>%
 
 
 
-Difference in MAF and LD can have an impact on power
+## Difference in MAF and LD can have an impact on power
+
+For equal sample size. How is power determined? Relates to R2 and sample size... Expected SE in exposure and outcome
+
+```{r}
+res <- res %>% select(-c(rsq, beta))
+res <- left_join(res, select(res_eur, rsidcode, pop, rsq, beta), by=c("rsidcode", "pop"))
+res <- res %>%
+  mutate(
+    rsq = TwoSampleMR::get_r_from_pn(pval, n)^2,
+    beta = sqrt(rsq / (2*maf*(1-maf))/r2),
+    Fstat = rsq * (n-2)/(1-rsq)
+  )
+
+head(simulateGP::expected_se(res$beta * res$r2, res$af, res$n, 1))
+```
 
 
-Difference in MAF and LD can have an impact on weak instrument bias
+## Difference in MAF and LD can have an impact on weak instrument bias
+
+Use 1/Fstat as the estimate for weak instrument bias. 
+
+```{r}
+ratios %>%
+  filter(Fstat_ratio > quantile(Fstat_ratio, 0.05) & Fstat_ratio < quantile(Fstat_ratio, 0.95)) %>%
+  ggplot(., aes(y=Fstat_ratio, x=pop)) +
+    geom_violin() +
+    scale_y_log10()
+```
+
+```{r}
+res2 <- res2 %>% 
+  mutate(Fstat = (rsq * n / (1-rsq)))
+res2 %>%
+  filter(Fstat > quantile(Fstat, 0.05) & Fstat < quantile(Fstat, 0.95)) %>%
+ggplot(., aes(y=1/Fstat, x=pop)) +
+  scale_y_log10() +
+  geom_violin()
+```
+
+Non-EUR tend to have greater weak instrument bias. Slightly weird distribution - sometimes lower WIP in non-EUR
+
+Plot against EUR instead
+
+```{r}
+temp <- left_join(subset(res2, pop != "EUR"), subset(res2, pop=="EUR", select=c(beta, rsq, Fstat, rsidcode)), by="rsidcode")
+temp %>%
+  filter(Fstat.x > 1) %>%
+  ggplot(., aes(x=1/Fstat.y, y=1/Fstat.x)) +
+  geom_point() + 
+  geom_abline(b=1, colour="white") +
+  geom_smooth() +
+  facet_wrap(~ pop) +
+  labs(x="Weak instrument bias (EUR)", y="Weak instrument bias (Other pops)")
+```
+
+Get a slope for these relationships
+
+```{r}
+group_by(temp, pop) %>%
+  do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice(n=2)})
+```
+
+So weak instrument bias is about 3x higher in AFR than Europeans assuming same sample size.
+
+```{r}
+table(temp$rsq.x > temp$rsq.y)
+```
+
+How much of this is allele frequency versus r2?
+
+```{r}
+res_eur2 <- subset(res, pop=="EUR") %>%
+  mutate(
+    rsq = TwoSampleMR::get_r_from_pn(pval, n)^2,
+    beta = sqrt(rsq / (2*maf*(1-maf))),
+    Fstat = rsq * (n-2)/(1-rsq)
+  )
+
+res3 <- left_join(res, dplyr::select(ungroup(res_eur2), rsidcode, beta), by="rsidcode") %>%
+  mutate(
+    rsq = beta^2 * 2 * maf * (1-maf),
+    Fstat = (rsq * n / (1-rsq))
+  )
+temp2 <- left_join(subset(res3, pop != "EUR"), subset(res3, pop=="EUR", select=c(beta, rsq, Fstat, rsidcode)), by="rsidcode")
+temp2 %>%
+  filter(Fstat.x > 1) %>%
+  ggplot(., aes(x=1/Fstat.y, y=1/Fstat.x)) +
+  geom_point() + 
+  geom_abline(b=1, colour="white") +
+  geom_smooth() +
+  facet_wrap(~ pop)
+```
+
+```{r}
+group_by(temp2, pop) %>%
+  do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice(n=2)})
+```
+
+The difference in 1/F would be ~2 for Africans without the LD problem (i.e. if you introduce fine mapping effectively).
+
+Quick look at r2 distributions to check they're ok
+
+```{r}
+res2 %>%
+  ggplot(., aes(x=pop, y=rsq)) +
+  geom_violin()
+```
+
+```{r}
+subset(res2, rsq > 0.01)
+```
+
+
+```{r}
+temp <- subset(res2, rsq > 0.01)$rsidcode
+rbind(subset(res2, rsq > 0.01), subset(res2, pop=="EUR" & rsidcode %in% temp)) %>% arrange(rsidcode)
+```
+
+Rsq in non-EUR higher when the MAF in EUR low.
 
 
 
+## Figures
+
+```{r}
+ ggplot(NULL, aes(c(-3,3))) +
+  geom_area(stat = "function", fun = function(x) {dnorm(x, mean=0.2)}, fill = "#00998a", xlim = c(-3, 1)) +
+  geom_area(stat = "function", fun = function(x) {dnorm(x, mean=0.2)}, fill = "grey80", xlim = c(1, 3)) +
+  geom_vline(xintercept=0.2) +
+  labs(x = "z", y = "", title="Population A") +
+  scale_y_continuous(breaks = NULL) +
+  scale_x_continuous(breaks = 1)
+```
+
+```{r}
+ ggplot(NULL, aes(c(-3,3))) +
+  geom_area(stat = "function", fun = function(x) {dnorm(x, mean=-0.4)}, fill = "#00998a", xlim = c(-3, 2)) +
+  geom_vline(xintercept=-0.4) +
+  geom_area(stat = "function", fun = function(x) {dnorm(x, mean=-0.4)}, fill = "grey80", xlim = c(2, 3)) +
+  labs(x = "z", y = "", title="Population B") +
+  scale_y_continuous(breaks = NULL) +
+  scale_x_continuous(breaks = 2)
+```
+
+### LD
+
+```{r}
+library(ieugwasr)
+a <- associations("1:1000000-1150000", "ieu-a-7")
+eur_ld <- ieugwasr::ld_matrix(a$rsid, pop="EUR")
+afr_ld <- ieugwasr::ld_matrix(a$rsid, pop="AFR")
+keepnames <- intersect(colnames(eur_ld), colnames(afr_ld))
+rsid_keep <- strsplit(keepnames, split="_") %>% sapply(., function(x) x[1])
+d <- subset(a, rsid %in% rsid_keep, select=c(rsid, position))
+eur_ld <- eur_ld[colnames(eur_ld) %in% keepnames, colnames(eur_ld) %in% keepnames]
+afr_ld <- afr_ld[colnames(afr_ld) %in% keepnames, colnames(afr_ld) %in% keepnames]
+# eur_ld[upper.tri(eur_ld)] <- NA
+# afr_ld[upper.tri(afr_ld)] <- NA
+rownames(eur_ld) <- colnames(eur_ld) <- d$position
+rownames(afr_ld) <- colnames(afr_ld) <- d$position
+eur_long <- reshape2::melt(eur_ld)
+afr_long <- reshape2::melt(afr_ld)
+ggplot(eur_long, aes(x=as.factor(Var1), y=as.factor(Var2))) +
+  geom_tile(aes(fill=value^2))
+
+eur_long$value[eur_long$Var1 > eur_long$Var2] <- 0
+afr_long$value[afr_long$Var1 > afr_long$Var2] <- 0
+geur <- ggplot(eur_long, aes(x=as.factor(Var1), y=as.factor(Var2))) +
+  geom_tile(aes(fill=abs(value))) +
+  scale_fill_gradient(low="white", high="red") +
+  theme(axis.text=element_blank(), axis.ticks=element_blank(), legend.position = "none") +
+  labs(x="", y="")
+ggsave(geur, file="geur.png", width=6, height=6)
+
+gafr <- ggplot(afr_long, aes(x=as.factor(Var1), y=as.factor(Var2))) +
+  geom_tile(aes(fill=abs(value))) +
+  scale_fill_gradient(low="white", high="red") +
+  theme(axis.text=element_blank(), axis.ticks=element_blank(), legend.position = "none") +
+  labs(x="", y="")
+ggsave(gafr, file="gafr.png", width=6, height=6)
+```
 
 
+```{r}
+library("grid")
+
+gafr <- gafr + annotation_custom(
+  grob = textGrob(label = "AFR", rot = -45,
+    x = unit(1.1, "npc"), y = unit(1.1, "npc")))
+
+print(gafr, vp = viewport(width = unit(0.5, "npc"),
+  height = unit(0.5, "npc"), angle = 45))
+```
 
 
 
