@@ -179,12 +179,20 @@ int_analysis <- function(dat){
 # - Power is lower in one population
 # - FDR under null
 
+sample_size <- function(nid, npop, max_ratio)
+{
+    rat <- seq(1, max_ratio, length.out=npop)
+    (nid / sum(rat) * rat) %>% round() %>% return()
+}
+
 param <- expand.grid(
     nsnp=100,
-    npop=c(2,5),
+    nid=50000,
+    npop=c(2,3,4,5),
     hsq=0.1,
-    rg=c(0, 1),
-    biv_m=c(0, 0.1),
+    rg=c(0),
+    biv_m=0,
+    max_ratio=c(1, 10),
     biv_sd=seq(0, 0.1, by=0.01),
     sim=1:100
 )
@@ -196,7 +204,8 @@ res <- mclapply(1:nrow(param), function(i)
     sigma <- matrix(param$rg[i], param$npop[i], param$npop[i])
     diag(sigma) <- 1
     af <- lapply(1:param$npop[i], function(i) runif(param$nsnp[i], 0.01, 0.99))
-    sim1(nsnp=param$nsnp[i], hsq=rep(param$hsq[i], param$npop[i]), sigma=sigma, nid=rep(10000, param$npop[i]), af=af, biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]), rep(5e-8, param$npop[i])) %>%
+    nid <- sample_size(param$nid[i], param$npop[i], param$max_ratio[i])
+    sim1(nsnp=param$nsnp[i], hsq=rep(param$hsq[i], param$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]), rep(5e-8, param$npop[i])) %>%
     int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param[i,], .)
 }, mc.cores=40) %>% bind_rows()
 save(res, file="inst_interaction_sim1.rdata")
