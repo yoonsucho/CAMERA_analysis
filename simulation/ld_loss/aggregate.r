@@ -12,4 +12,4 @@ o <- lapply(a, function(f){
 
 res <- lapply(o, function(x) x[[2]]) %>% bind_rows()
 snplist <- lapply(o, function(x) x[[1]]) %>% bind_rows()
-save(res, snplist, file=file.path(config$outdir, "results.rdata"))
+save(res, snplist, file=file.path(config$resultdir, "results.rdata"))
