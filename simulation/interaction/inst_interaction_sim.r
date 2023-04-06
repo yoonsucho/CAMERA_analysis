@@ -8,55 +8,6 @@ library(lmtest)
 library(TwoSampleMR)
 library(parallel)
 
-sim1 <- function(nsnp, hsq1, hsq2, rg, nid1, nid2, maf1, maf2, biv1, biv2, inst_pval1, inst_pval2)
-{
-  # Generate effects for exposures in pop1 and pop2
-  s1 <- sqrt(hsq1 / nsnp)
-  s2 <- sqrt(hsq2 / nsnp)
-  sigma <- matrix(c(1, rg, rg, 1), 2, 2)
-  eff <- MASS::mvrnorm(nsnp, c(0,0), sigma)
-  
-  gx1 <- eff[,1] * s1
-  gx2 <- eff[,2] * s2
-
-  # create genotypes
-  g1 <- make_geno(nid1, nsnp, maf1)
-  g2 <- make_geno(nid2, nsnp, maf2)
-  
-  # create confounder
-  u1 <- rnorm(nid1)
-  u2 <- rnorm(nid2)
-  
-  # create x
-  x1 <- make_phen(c(0.1, gx1), cbind(u1, g1))
-  x2 <- make_phen(c(0.1, gx2), cbind(u2, g2))
-
-  # create y
-  y1 <- make_phen(c(0.1, biv1), cbind(u1, x1))
-  y2 <- make_phen(c(0.1, biv2), cbind(u2, x2))
-
-  # Summary data for pop1 
-  ss1 <- get_effs(x1, y1, g1)
-  
-  # Summary data for pop2
-  ss2 <- get_effs(x2, y2, g2)
-
-  # Organise the data
-  dat <- tibble(
-  	y1 = ss1$beta.outcome,
-  	y2 = ss2$beta.outcome,
-  	x1 = ss1$beta.exposure,
-  	x2 = ss2$beta.exposure
-  )
-  
-  index <- union(
-    subset(ss1, pval.exposure < inst_pval1)$SNP,
-    subset(ss2, pval.exposure < inst_pval2)$SNP
-  )
-  dat <- dat[index,]
-  return(dat)
-}
-
 make_geno <- function(nid, nsnp, af)
 {
     if(length(af) == 1)
@@ -230,22 +181,22 @@ int_analysis <- function(dat){
 
 param <- expand.grid(
     nsnp=100,
-    npop=c(2,3,4),
+    npop=c(2,5),
     hsq=0.1,
-    rg=c(0, 0.5, 1),
-    biv_m=c(0, 1),
-    biv_sd=c(0, 0.1, 0.2),
+    rg=c(0, 1),
+    biv_m=c(0, 0.1),
+    biv_sd=seq(0, 0.1, by=0.01),
     sim=1:100
 )
 param$index <- 1:nrow(param)
-
+dim(param)
 res <- mclapply(1:nrow(param), function(i)
 {
+    message(i)
     sigma <- matrix(param$rg[i], param$npop[i], param$npop[i])
     diag(sigma) <- 1
     af <- lapply(1:param$npop[i], function(i) runif(param$nsnp[i], 0.01, 0.99))
     sim1(nsnp=param$nsnp[i], hsq=rep(param$hsq[i], param$npop[i]), sigma=sigma, nid=rep(10000, param$npop[i]), af=af, biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]), rep(5e-8, param$npop[i])) %>%
     int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param[i,], .)
-}, mc.cores=40)
+}, mc.cores=40) %>% bind_rows()
 save(res, file="inst_interaction_sim1.rdata")
-
