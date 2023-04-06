@@ -1,0 +1,283 @@
+---
+title: "Cross-ancestry LD differentials and association mapping"
+output: html_notebook
+---
+
+Consider a causal SNP $g$ has an influence on $x$ of $\beta_x$, and standard error 
+
+$$
+\begin{aligned}
+se_{\beta_x} & = \sqrt{\frac{\sigma^2}{2np(1-p)}} \\
+& = \sqrt{\frac{Var(x) - 2p(1-p)\beta_x^2}{2p(1-p)n}} \\
+& = \sqrt{\frac{Var(x)}{2p(1-p)n} - \frac{\beta^2}{n}}
+\end{aligned}
+$$
+
+where $\sigma^2$ is the residual error variance. The effect estimate at a neighbouring SNP will be $\beta_{o_k} = r^2(o_k, x)\beta_x$ and so $\sigma^2_{o_k} = var(x) - 2p(1-p)\beta_{o_k}^2r^2(x,o_k)$.
+
+For a causal variant, find the probability of neighbouring SNPs being the causal variant. Then for each of the neighbouring SNPs being the causal variant, ask what probability that they would replicate in a different population. OK!
+
+
+```{r}
+library(simulateGP)
+library(dplyr)
+library(here)
+load(here("data/ld/maps.rdata"))
+head(mapEUR)
+```
+
+```{r}
+subset_ldobj <- function(ldobj, snps)
+{
+  i <- which(ldobj$map$snp %in% snps)
+  ldobj$map <- ldobj$map[i,]
+  ldobj$ld <- ldobj$ld[i,i]
+  return(ldobj)
+}
+
+organise_ldobj <- function(dirlist, region)
+{
+  ld <- lapply(dirlist, readRDS)
+  snplist <- Reduce(intersect, lapply(ld, function(x) x$map$snp))
+  ld <- lapply(ld, function(x) subset_ldobj(x, snplist))
+  stopifnot(all(ld[[1]]$map$snp == ld[[2]]$map$snp))
+  return(ld)
+}
+pops <- c("EUR", "EAS", "SAS", "AFR", "AMR")
+ldobjs <- organise_ldobj(as.list(here("data", "ld", paste0("ld", pops), paste0("ldobj_", mapEUR$region[1], ".rds"))), mapEUR$region[1])
+names(ldobjs) <- pops
+glimpse(ldobjs)
+```
+
+
+```{r}
+tempmap <- ldobjs[["EUR"]]$map
+causalsnp <- sample(1:nrow(tempmap), 1)
+
+ldscore <- colSums(ldobjs$EUR$ld)
+#causalsnp <- which.max(ldscore)
+beta <- 0.1
+tempmap$causal <- 1:nrow(tempmap) == causalsnp
+which(tempmap$causal)
+tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
+tempmap$beta <- beta * sign(tempmap$ld) * tempmap$ld^2
+tempmap$se <- expected_se(tempmap$beta, tempmap$af, 100000, 1)
+ggplot(tempmap, aes(ld, beta)) +
+  geom_point()
+ggplot(tempmap, aes(ld, se)) +
+  geom_point()
+ggplot(tempmap, aes(af, se)) +
+  geom_point(aes(colour=causal)) +
+  geom_point(data=subset(tempmap, causal))
+ggplot(tempmap, aes(af, beta/se)) +
+  geom_point(aes(colour=causal)) +
+  geom_point(data=subset(tempmap, causal))
+```
+
+Notice that allele frequency has a big impact on standard error
+
+For each SNP in the region we now have its expected effect and expected standard error. Next question is what is the probability for each SNP being the top hit? Simple approximation is to ask probability of each SNP being larger than the top hit, and dividing by the sum of all probabilities
+
+```{r}
+#' Probability of one effect being larger than another
+#'
+#' What is the probability that a tag SNP has a bigger effect than a causal SNP?
+#' They both have an expected effect and standard error. b_x ~ N(beta, se^2)
+#' Find the probability of b_1 - b_2 > 0
+#' E(b_1-b_2) = m_1 - m_2
+#' V(b_1-b_2) = v_1 + v_2
+#'
+#' @param m1 tag SNP effect
+#' @param se1 tag SNP se
+#' @param m2 causal snp effect
+#' @param se2 causal snp se
+#'
+#' @return probability of tag snp effect being larger than causal snp
+#' @export
+prob_y_gt_x <- function(m1, se1, m2, se2)
+{
+  m <- m1 - m2
+  se <- se1^2 + se2^2
+  pnorm(0, m, sqrt(se), low=F)
+}
+# The probability that each SNP has a larger assoc than the causal variant
+tempmap$prob_tophit <- sapply(1:nrow(tempmap), function(i) prob_y_gt_x(tempmap$beta[i], tempmap$se[i], tempmap$beta[causalsnp], tempmap$se[causalsnp]))
+# The scaled probability of being 
+tempmap$prob_tophit2 <- tempmap$prob_tophit / sum(tempmap$prob_tophit)
+ggplot(tempmap, aes(af, prob_tophit2)) +
+  geom_point(aes(colour=causal)) +
+  geom_point(data=subset(tempmap, causal))
+subset(tempmap, prob_tophit2 > 0.01)
+table(tempmap$ld>0.99)
+```
+
+Now we have a probability distribution for a SNP being selected as the tophit in the discovery. Next we can ask:
+what is the expected rsq for the discovery hit with the causal variant in a new population?
+
+```{r}
+#tempmap <- subset(tempmap, prob_tophit2 > 0.001)
+sapply(ldobjs, function(x){
+  x <- subset_ldobj(x, tempmap$snp)$ld[tempmap$causal,]
+  sum(x * tempmap$prob_tophit2) / sum(tempmap$prob_tophit2)
+})
+```
+
+Wrap that up. Choose SNP effects that will give an expected discovery pval of 5e-8
+
+```{r}
+tempmap <- ldobjs[["EUR"]]$map
+tempmap$ldscore <- colSums(ldobjs$EUR$ld)
+pval <- 5e-8
+af <- 0.1
+
+b_from_pafn <- function(pval, af, n)
+{
+  tval <- qnorm(pval, low=F)
+  rsq <- tval^2 / (tval^2 + n)
+  beta <- sqrt(rsq / (2*af*(1-af)))
+  beta
+  
+}
+b_from_pafn(5e-8, 0.1, 100000)
+
+n <- 100000
+af <- 0.1
+g <- rbinom(n, 2, af)
+beta <- b_from_pafn(5e-8, af, n)
+xhat <- g * b_from_pafn(5e-8, af, n)
+y <- xhat + rnorm(n, 0, sqrt(1-var(xhat)))
+var(y)
+cor(g,y)^2
+summary(lm(y ~ g))
+expected_se(beta, af, n, 1)
+
+tophit_cross_ancestry_ld_loss <- function(tempmap, snp, pval, nEUR, ldobjs)
+{
+  causalsnp <- which(tempmap$snp == snp)
+  tempmap$causal <- 1:nrow(tempmap) == causalsnp
+  tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
+  beta <- b_from_pafn(pval, tempmap$af[tempmap$causal], nEUR)
+  tempmap$beta <- beta * sign(tempmap$ld) * tempmap$ld^2
+  tempmap$se <- expected_se(tempmap$beta, tempmap$af, nEUR, 1)
+  # The probability that each SNP has a larger assoc than the causal variant
+  tempmap$prob_tophit <- sapply(1:nrow(tempmap), function(i) prob_y_gt_x(tempmap$beta[i], tempmap$se[i], tempmap$beta[causalsnp], tempmap$se[causalsnp]))
+  # The scaled probability of being 
+  tempmap$prob_tophit2 <- tempmap$prob_tophit / sum(tempmap$prob_tophit)
+  r2 <- sapply(ldobjs, function(x){
+    x <- subset_ldobj(x, tempmap$snp)$ld[tempmap$causal,]
+    sum(x * tempmap$prob_tophit2) / sum(tempmap$prob_tophit2)
+  })
+  return(list(tempmap, tibble(snp=tempmap$snp[tempmap$causal], pop=names(r2), r2=r2)))
+}
+
+a <- tophit_cross_ancestry_ld_loss(tempmap, tempmap$snp[1], 5e-8, 100000, ldobjs)
+a[[1]] %>% mutate(pval=pnorm(abs(beta)/se, low=F))
+a[[2]]
+```
+
+Do it for lots of SNPs
+
+```{r}
+res <- lapply(10^-seq(8, 64, by=4), function(pval)
+  {
+    message(pval)
+    lapply(sample(tempmap$snp, 100), function(snp) tophit_cross_ancestry_ld_loss(tempmap, snp, pval, 100000, ldobjs)[[2]]) %>% bind_rows() %>% mutate(pval=pval)
+  }) %>% bind_rows()
+
+ggplot(res, aes(pop,r2)) +
+  geom_boxplot()
+
+res %>% group_by(snp, pval) %>%
+  mutate(r2=r2/r2[1]) %>%
+  ggplot(., aes(pop, r2)) +
+    geom_line(aes(group=snp))
+
+res %>% group_by(snp, pval) %>%
+  mutate(r2=r2/r2[1]) %>%
+  group_by(pop, pval) %>%
+  summarise(r2=mean(r2)) %>%
+  ggplot(., aes(x=-log10(pval), y=r2)) +
+    geom_point(aes(colour=pop)) +
+    geom_line(aes(colour=pop)) +
+    scale_color_brewer(type="qual")
+
+res %>%
+  group_by(pop, pval) %>%
+  summarise(r2=mean(r2)) %>%
+  ggplot(., aes(x=-log10(pval), y=r2)) +
+    geom_point(aes(colour=pop)) +
+    geom_line(aes(colour=pop)) +
+    scale_color_brewer(type="qual")
+
+
+```
+
+
+Ok so when there is one shared causal variant across populations the average reduction in rsq is pretty tiny apart from for Africans where it's 74%
+
+What about if there are multiple causal variants?
+
+```{r}
+tophit_cross_ancestry_ld_loss_multiple <- function(tempmap, ncausal, pval, nEUR, ldobjs)
+{
+  causalsnp <- sample(1:nrow(tempmap), ncausal, replace=FALSE)
+  tempmap$causal <- 1:nrow(tempmap) %in% causalsnp
+  tempmap$beta <- 0
+  tempmap$beta[tempmap$causal] <- b_from_pafn(pval, tempmap$af[tempmap$causal], nEUR) * sample(c(-1, 1), ncausal, replace=TRUE)
+  xvar <- sqrt(2 * tempmap[["af"]] * (1-tempmap[["af"]]))
+	tempmap$beta <- (diag(1/xvar) %*% ldobjs$EUR$ld %*% diag(xvar) %*% tempmap$beta) %>% drop()
+  tempmap$se <- expected_se(tempmap$beta, tempmap$af, nEUR, 1)
+  # The probability that each SNP has a larger assoc than the causal variant
+  tophit <- which.max(tempmap$beta)[1]
+  tempmap$prob_tophit <- sapply(1:nrow(tempmap), function(i) prob_y_gt_x(tempmap$beta[i], tempmap$se[i], tempmap$beta[tophit], tempmap$se[tophit]))
+  # The scaled probability of being 
+  tempmap$prob_tophit2 <- tempmap$prob_tophit / sum(tempmap$prob_tophit)
+  r2 <- sapply(ldobjs, function(x){
+    x <- subset_ldobj(x, tempmap$snp)$ld[tophit,]
+    sum(x * tempmap$prob_tophit2) / sum(tempmap$prob_tophit2)
+  })
+  return(list(tempmap, tibble(ncausal=ncausal, pop=names(r2), r2=r2)))
+}
+resm <- lapply(2:10, function(nc)
+  {
+    lapply(1:100, function(sim) tophit_cross_ancestry_ld_loss_multiple(tempmap, nc, 5e-8, 100000, ldobjs)[[2]] %>% mutate(sim=sim)) %>% bind_rows()
+  }) %>% bind_rows()
+resm
+```
+
+```{r}
+group_by(resm, ncausal, sim) %>%
+  mutate(r2=r2/r2[1]) %>%
+  group_by(ncausal, pop) %>%
+  summarise(r2=mean(r2)) %>%
+  ggplot(., aes(x=ncausal, y=r2)) +
+  geom_point(aes(colour=pop)) +
+  geom_line(aes(colour=pop))
+```
+
+```{r}
+resm %>%
+  group_by(ncausal, pop) %>%
+  summarise(r2=mean(r2)) %>%
+  ggplot(., aes(x=ncausal, y=r2)) +
+  geom_point(aes(colour=pop)) +
+  geom_line(aes(colour=pop))
+
+```
+
+
+```{r}
+resm %>%
+  ggplot(., aes(as.factor(ncausal), r2)) +
+  geom_boxplot(aes(fill=pop)) + scale_fill_brewer(type="qual")
+```
+
+
+## Summary
+
+- If you use European exposure on non-European outcome there will be a problem because the expected bgy = bgx * bxy. If bxy is the same across populations and bgx and bgy are taken from different populations then there will be bias.
+- This bias isn't massively affected by the complexity of the region e.g. 1 causal variant vs 10 causal variants gives the same issue
+- 
+
+
+

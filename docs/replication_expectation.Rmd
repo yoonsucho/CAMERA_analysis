@@ -1,0 +1,73 @@
+---
+title: Evaluating expected replication rates
+author: Gibran Hemani
+date: 2023-02-21
+---
+
+
+Magosi et al 2017 define a method called the M-statistic which tests if a study has systematic heterogeneity in a meta analysis, by finding the mean deviation of effects across a set of loci. Implemented in the `getspres` R package.
+
+```{r}
+library(getspres)
+heartgenes214
+```
+
+```{r}
+heartgenes3 <- subset(heartgenes214, 
+    variants %in% c("rs10139550", "rs10168194", "rs11191416")) 
+heartgenes3
+```
+
+
+```{r}
+getspres_results <- getspres(beta_in = heartgenes3$beta_flipped, 
+                               se_in = heartgenes3$gcse, 
+                      study_names_in = heartgenes3$studies, 
+                    variant_names_in = heartgenes3$variants)
+str(getspres_results)
+```
+
+```{r}
+df_spres <- getspres_results$spre_dataset
+head(df_spres)
+plotspres_res <- plotspres(beta_in = df_spres$beta, 
+                              se_in = df_spres$se, 
+                     study_names_in = as.character(df_spres$study_names), 
+                   variant_names_in = as.character(df_spres$variant_names),
+                           spres_in = df_spres$spre,
+                          save_plot = FALSE)
+
+```
+
+1. Get ld region
+2. simulate genetic effect in EUR
+3. no genetic effect in EAS
+4. meta-analysis to choose best SNP
+5. raw to choose EUR SNP
+6. Compare replication rate
+
+
+```{r}
+sim <- function(ldmat1, ldmat2, beta1)
+{
+  
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

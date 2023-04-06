@@ -64,7 +64,10 @@ sim1 <- function(nsnp, hsq1, hsq2, rg, nid1, nid2, maf1, maf2, biv1, biv2, inst_
   	x2 = ss2$beta.exposure
   )
   
-  index <- ss1$pval < inst_pval1 & ss2$pval < inst_pval2
+  index <- union(
+    subset(ss1, pval.exposure < inst_pval1)$SNP,
+    subset(ss2, pval.exposure < inst_pval2)$SNP
+  )
   dat <- dat[index,]
 
   model1 <- '
@@ -90,13 +93,13 @@ set.seed(123456)
 res <- sim1(nsnp=100, hsq1=0.4, hsq2=0.4, rg=0, nid1=20000, nid2=20000, maf1=0.4, maf2=0.5, biv1=0.2, biv2=0.2, inst_pval1=1, inst_pval2=1)
 (s1 <- summary(res$model1, fit.measures=TRUE))
 (s2 <- summary(res$model2, fit.measures=TRUE))
-print(c(mod1=s1$FIT['aic'], mod2=s2$FIT['aic']))
+print(c(mod1=s1$fit['aic'], mod2=s2$fit['aic']))
 ```
 
 According to https://www.scribbr.com/statistics/akaike-information-criterion/ "If a model is more than 2 AIC units lower than another, then it is considered significantly better than that model."
 
 ```{r}
-s1$FIT['aic'] - s2$FIT['aic']
+s1$fit['aic'] - s2$fit['aic']
 ```
 
 Example 2 - Now try with different causal effects
@@ -106,11 +109,11 @@ set.seed(12345)
 res <- sim1(200, 0.4, 0.4, 1, 20000, 20000, 0.4, 0.5, 0.2, -0.2, inst_pval1=1, inst_pval2=1)
 (s1 <- summary(res$model1, fit.measures=TRUE))
 (s2 <- summary(res$model2, fit.measures=TRUE))
-print(c(mod1=s1$FIT['aic'], mod2=s2$FIT['aic']))
+print(c(mod1=s1$fit['aic'], mod2=s2$fit['aic']))
 ```
 
 ```{r}
-s1$FIT['aic'] - s2$FIT['aic']
+s1$fit['aic'] - s2$fit['aic']
 ```
 
 Clearly finds a big difference
@@ -205,5 +208,221 @@ Questions:
   - Different values of biv1 and biv2
 
 2. Introduce winner's curse. What happens if pop1 has more power than pop2, and you only use SNPs that are significant at 5e-8
+
+
+
+---
+
+
+## Interactions
+
+
+```{r}
+sim1 <- function(nsnp, hsq1, hsq2, rg, nid1, nid2, maf1, maf2, biv1, biv2, inst_pval1, inst_pval2)
+{
+  # Generate effects for exposures in pop1 and pop2
+  s1 <- sqrt(hsq1 / nsnp)
+  s2 <- sqrt(hsq2 / nsnp)
+  sigma <- matrix(c(1, rg, rg, 1), 2, 2)
+  eff <- mvrnorm(nsnp, c(0,0), sigma)
+  
+  gx1 <- eff[,1] * s1
+  gx2 <- eff[,2] * s2
+
+  # create genotypes
+  g1 <- make_geno(nid1, nsnp, maf1)
+  g2 <- make_geno(nid2, nsnp, maf2)
+  
+  # create confounder
+  u1 <- rnorm(nid1)
+  u2 <- rnorm(nid2)
+  
+  # create x
+  x1 <- make_phen(c(0.1, gx1), cbind(u1, g1))
+  x2 <- make_phen(c(0.1, gx2), cbind(u2, g2))
+
+  # create y
+  y1 <- make_phen(c(0.1, biv1), cbind(u1, x1))
+  y2 <- make_phen(c(0.1, biv2), cbind(u2, x2))
+
+  # Summary data for pop1 
+  ss1 <- get_effs(x1, y1, g1)
+  
+  # Summary data for pop2
+  ss2 <- get_effs(x2, y2, g2)
+
+  # Organise the data
+  dat <- tibble(
+  	y1 = ss1$beta.outcome,
+  	y2 = ss2$beta.outcome,
+  	x1 = ss1$beta.exposure,
+  	x2 = ss2$beta.exposure
+  )
+  
+  index <- union(
+    subset(ss1, pval.exposure < inst_pval1)$SNP,
+    subset(ss2, pval.exposure < inst_pval2)$SNP
+  )
+  dat <- dat[index,]
+  return(dat)
+}
+
+sem_analysis <- function(dat)
+{
+  model1 <- '
+  y1 ~ biv*x1
+  y2 ~ biv*x2
+  '
+  mod1 <- summary(sem(model1, data=dat), fit.measures=TRUE)
+
+  model2 <- '
+  y1 ~ biv_1*x1
+  y2 ~ biv_2*x2
+  '
+  mod2 <- summary(sem(model2, data=dat), fit.measures=TRUE)
+  
+  return(list(model1=mod1, model2=mod2, aicdif=mod1$fit['aic']-mod2$fit['aic']))
+}
+
+dat <- sim1(nsnp=100, hsq1=0.4, hsq2=0.4, rg=0, nid1=20000, nid2=20000, maf1=0.4, maf2=0.5, biv1=0.2, biv2=0.1, inst_pval1=5e-8, inst_pval2=5e-8)
+dat
+sem_analysis(dat)
+```
+
+
+```{r}
+library(tidyr)
+interaction_analysis <- function(dat)
+{
+  d <- bind_cols(
+    gather(subset(dat, select=c(y1, y2)), "pop", "y"),
+    gather(subset(dat, select=c(x1, x2)), "popx", "x")
+  )
+  d
+  summary(lm(y ~ x * pop, d))
+}
+```
+
+
+```{r}
+simn <- function(nsnp, hsq, rg, nid, maf, biv, inst_pval)
+{
+  npop <- length(hsq)
+  stopifnot(length(hsq) == nrow(rg))
+  stopifnot(length(hsq) == length(nid))
+  stopifnot(length(hsq) == length(maf))
+  stopifnot(length(hsq) == length(biv))
+
+  # Generate effects for exposures in pop1 and pop2
+  sigma <- rg
+  diag(sigma) <- hsq / nsnp
+  eff <- mvrnorm(nsnp, rep(0, npop), sigma)
+
+  # create genotypes
+  g <- lapply(1:npop, function(i)
+    {
+    make_geno(nid[i], nsnp, maf[[i]])
+  })
+
+  # create confounder
+  u <- lapply(1:npop, function(i)
+    {
+    rnorm(nid[i])
+  })
+  
+  # create x
+  x <- lapply(1:npop, function(i)
+    {
+    make_phen(c(0.1, eff[,i]), cbind(u[[i]], g[[i]]))
+  })
+
+  # create y
+  y <- lapply(1:npop, function(i)
+    {
+    make_phen(c(0.1, biv[i]), cbind(u[[i]], x[[i]]))
+  })
+
+  # Summary data
+  ss <- lapply(1:npop, function(i)
+    {
+    get_effs(x[[i]], y[[i]], g[[i]])
+  })
+
+  keep <- lapply(ss, function(x)
+    {
+    subset(x, pval.exposure < inst_pval)$SNP
+  }) %>% Reduce(union, .)
+  
+  ss <- lapply(1:npop, function(i)
+    {
+    subset(ss[[i]], SNP %in% keep) %>%
+      {tibble(x=.$beta.exposure, sex=.$se.exposure, y=.$beta.outcome, sey=.$se.outcome, pop=i)}
+  }) %>% bind_rows()
+  
+  return(ss)
+}
+```
+
+
+```{r}
+dat <- simn(100, c(0.1, 0.1), diag(c(1,1)), c(10000, 10000), c(0.2, 0.4), c(0.1, 0.1), 5e-8)
+```
+
+```{r}
+summary(lm(y ~ -1 + x * pop, weight=1/sey^2, dat))
+```
+
+```{r}
+dat <- simn(100, c(0.1, 0.1), diag(c(1,1)), c(10000, 10000), c(0.2, 0.4), c(0.1, 0.1), 5e-8)
+```
+
+```{r}
+summary(lm(y ~ -1 + x * as.factor(pop), weight=1/sey^2, dat))
+```
+
+
+```{r}
+dat <- simn(100, c(0.1, 0.1), diag(c(1,1)), c(50000, 50000), c(0.2, 0.4), c(0.1, 0.2), 5e-8)
+summary(lm(y ~ -1 + x * as.factor(pop), weight=1/sey^2, dat))
+```
+
+```{r}
+dat <- simn(100, c(0.1, 0.1, 0.1), diag(c(1,1,1)), c(50000, 50000, 50000), c(0.2, 0.4, 0.3), c(0.1, 0.1, 0), 5e-8)
+summary(lm(y ~ -1 + x + x:as.factor(pop), weight=1/sey^2, dat))
+```
+
+```{r}
+param <- expand.grid(
+  nsnp = 100,
+  hsq=0.1,
+  rg=c(0),
+  n1=c(10000),
+  n2=c(10000, 20000),
+  n3=c(10000, 20000),
+  maf1=c(0.2, 0.5),
+  maf2=c(0.2, 0.5),
+  maf3=c(0.2, 0.5),
+  biv=c(0, 0.2),
+  inst_pval=c(1, 5e-8),
+  nsim=1:10
+)
+res <- lapply(1:nrow(param), function(i)
+  {
+  rg <- matrix(param$rg[i], 3,3)
+  diag(rg) <- 1
+  dat <- simn(param$nsnp[i], rep(param$hsq[i], 3), rg, c(param$n1[i], param$n2[i], param$n3[i]), c(param$maf1[i], param$maf2[i], param$maf3[i]), rep(param$biv[i], 3), param$inst_pval[i])
+  res <- summary(lm(y ~ -1 + x + x : as.factor(pop), weight=1/sey^2, dat))
+  l <- as.list(param[i,])
+  l$pval <- res$coef[1:3,4]
+  l$what <- 1:3
+  as_tibble(l)
+}) %>% bind_rows()
+
+res %>% group_by(biv, what) %>%
+  summarise(nsig=sum(pval < 0.05)/n())
+```
+
+
+
 
 
