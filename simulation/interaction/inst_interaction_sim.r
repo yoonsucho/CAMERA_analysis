@@ -8,6 +8,7 @@ library(lmtest)
 library(TwoSampleMR)
 library(parallel)
 options(mc.cores=40)
+set.seed(12345)
 
 make_geno <- function(nid, nsnp, af) {
     if(length(af) == 1)

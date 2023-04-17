@@ -86,7 +86,7 @@ res2 %>%
     filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0, biv_m==0) %>%
     group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
     summarise(pow=sum(pval < 0.05)/n(), bias=mean(b-biv_m), mse=mean((b-biv_m)^2)) %>%
-    ggplot(., aes(x=biv_m, y=pow)) +
+    ggplot(., aes(x=npop, y=pow)) +
         geom_point(aes(colour=as.factor(npop))) +
         geom_line(aes(colour=as.factor(npop))) +
         facet_grid(max_ratio ~ ., labeller=label_both) +
