@@ -7,9 +7,9 @@ library(metafor)
 library(lmtest)
 library(TwoSampleMR)
 library(parallel)
+options(mc.cores=40)
 
-make_geno <- function(nid, nsnp, af)
-{
+make_geno <- function(nid, nsnp, af) {
     if(length(af) == 1)
     {
         return(matrix(rbinom(nid * nsnp, 2, af), nid, nsnp))
@@ -179,8 +179,7 @@ int_analysis <- function(dat){
 # - Power is lower in one population
 # - FDR under null
 
-sample_size <- function(nid, npop, max_ratio)
-{
+sample_size <- function(nid, npop, max_ratio) {
     rat <- seq(1, max_ratio, length.out=npop)
     (nid / sum(rat) * rat) %>% round() %>% return()
 }
@@ -209,3 +208,56 @@ res <- mclapply(1:nrow(param), function(i)
     int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param[i,], .)
 }, mc.cores=40) %>% bind_rows()
 save(res, file="inst_interaction_sim1.rdata")
+
+param2 <- expand.grid(
+    nsnp=100,
+    nid=50000,
+    npop=c(2,3,4,5),
+    hsq=0.1,
+    rg=c(0),
+    biv_m=seq(0, 0.1, by=0.01),
+    max_ratio=c(1, 10),
+    biv_sd=c(0, 0.1),
+    sim=1:100
+)
+param2$index <- 1:nrow(param2)
+dim(param2)
+res2 <- mclapply(1:nrow(param2), function(i)
+{
+    message(i)
+    sigma <- matrix(param2$rg[i], param2$npop[i], param2$npop[i])
+    diag(sigma) <- 1
+    af <- lapply(1:param2$npop[i], function(i) runif(param2$nsnp[i], 0.01, 0.99))
+    nid <- sample_size(param2$nid[i], param2$npop[i], param2$max_ratio[i])
+    sim1(nsnp=param2$nsnp[i], hsq=rep(param2$hsq[i], param2$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param2$npop[i], param2$biv_m[i], param2$biv_sd[i]), rep(5e-8, param2$npop[i])) %>%
+    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param2[i,], .)
+}, mc.cores=40) %>% bind_rows()
+save(res2, file="inst_interaction_sim2.rdata")
+
+param3 <- expand.grid(
+    nsnp=100,
+    nid=50000,
+    npop=c(2,3,4,5),
+    hsq=c(0.1, 0.8),
+    rg=c(0, 0.5, 1),
+    biv_m=0,
+    max_ratio=c(1, 10),
+    biv_sd=0,
+    sim=1:300
+)
+param3$index <- 1:nrow(param3)
+dim(param3)
+res3 <- mclapply(1:nrow(param3), function(i)
+{
+    message(i)
+    sigma <- matrix(param3$rg[i], param3$npop[i], param3$npop[i])
+    diag(sigma) <- 1
+    af <- lapply(1:param3$npop[i], function(i) runif(param3$nsnp[i], 0.01, 0.99))
+    nid <- sample_size(param3$nid[i], param3$npop[i], param3$max_ratio[i])
+    sim1(nsnp=param3$nsnp[i], hsq=rep(param3$hsq[i], param3$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param3$npop[i], param3$biv_m[i], param3$biv_sd[i]), rep(5e-8, param3$npop[i])) %>%
+    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param3[i,], .)
+}, mc.cores=40) %>% bind_rows()
+save(res3, file="inst_interaction_sim3.rdata")
+
+
+
