@@ -194,7 +194,7 @@ param <- expand.grid(
     biv_m=0,
     max_ratio=c(1, 10),
     biv_sd=seq(0, 0.1, by=0.01),
-    sim=1:100
+    sim=1:500
 )
 param$index <- 1:nrow(param)
 dim(param)
@@ -219,7 +219,7 @@ param2 <- expand.grid(
     biv_m=seq(0, 0.1, by=0.01),
     max_ratio=c(1, 10),
     biv_sd=c(0, 0.1),
-    sim=1:100
+    sim=1:500
 )
 param2$index <- 1:nrow(param2)
 dim(param2)
@@ -244,7 +244,7 @@ param3 <- expand.grid(
     biv_m=0,
     max_ratio=c(1, 10),
     biv_sd=0,
-    sim=1:300
+    sim=1:1000
 )
 param3$index <- 1:nrow(param3)
 dim(param3)
