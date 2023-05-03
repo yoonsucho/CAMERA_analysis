@@ -9,6 +9,7 @@ main <- function()
   ## Input
   config <- jsonlite::read_json("config.json")
   ld_data_dir <- config$ld_data_dir
+  # region_code <- "12_106958748_109025901"
   region_code <- commandArgs(T)[1]
   outdir <- file.path(config$outdir, region_code)
   dir.create(outdir, recursive=TRUE)
@@ -17,17 +18,26 @@ main <- function()
   tempmap <- ldobjs[["EUR"]]$map
   tempmap$ldscore <- colSums(ldobjs$EUR$ld^2)
 
-  load(here("simulation/ld_loss/data","gwashits.rdata"))
+  load(here("data","gwashits.rdata"))
   gwashits <- subset(gwashits, code %in% region_code & rsid %in% tempmap$snp)
   matched <- match_maf_ldscore(tempmap, gwashits$rsid) %>%
     left_join(., gwashits, by=c("target"="rsid")) %>%
     rename(rsid=matched)
   snplist <- bind_rows(gwashits, matched)
   print(str(snplist))
+  # i <- 1
   res <- lapply(1:nrow(snplist), function(i) {
     message(i)
     print(snplist[i,] %>% str())
-    tophit_cross_ancestry_ld_loss_empirical(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs)[[2]]
+    o <- tophit_cross_ancestry_ld_loss_empirical(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs)
+    tempmap1 <- generate_tophit_probs(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs)
+    tempmap2 <- generate_tophit_probs_ma(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs, prop_afr=0.1)
+    tempmap3 <- generate_tophit_probs_ma(tempmap, snplist$rsid[i], snplist$p[i], snplist$n[i], ldobjs, prop_afr=0.5)
+    bind_rows(
+      eval_tophit_probs(ldobjs, tempmap1) %>% mutate(prop_afr=0, pval=snplist$p[i], n=snplist$n[i]),
+      eval_tophit_probs(ldobjs, tempmap2) %>% mutate(prop_afr=0.1, pval=snplist$p[i], n=snplist$n[i]),
+      eval_tophit_probs(ldobjs, tempmap3) %>% mutate(prop_afr=0.5, pval=snplist$p[i], n=snplist$n[i])
+    )
   }) %>% bind_rows() %>% mutate(region=region_code)
   save(snplist, res, file=file.path(outdir, "result.rdata"))
   unlink(file.path(outdir, pops), recursive=TRUE)
@@ -226,5 +236,136 @@ tophit_cross_ancestry_ld_loss_empirical <- function(tempmap, snp, pval, nEUR, ld
   tib$causal_prob[tib$pop == "EUR"] <- tempmap$prob_tophit[tempmap$causal]
   return(list(tempmap, tib))
 }
+
+#' Fixed effects meta analysis vectorised across multiple SNPs
+#' 
+#' @param beta_mat Matrix of betas - rows are SNPs, columns are studies
+#' @param se_mat Matrix of SEs - rows are SNPs, columns are studies
+#' 
+#' @return list of meta analysis betas and SEs
+fema <- function(beta_mat, se_mat) {
+  w <- 1/se_mat^2
+  beta <- rowSums(beta_mat * w) / rowSums(w)
+  se <- sqrt(1/rowSums(w))
+  return(list(beta=beta, se=se))
+}
+# betas_mat <- rbind(c(0.4, 0.6, 0.8, 1.0, 1.2), sample(c(0.4, 0.6, 0.8, 1.0, 1.2)))
+# se_mat <- rbind(c(0.2, 0.1, 0.3, 0.4, 0.2), sample(c(0.2, 0.1, 0.3, 0.4, 0.2)))
+
+# fema(betas_mat, se_mat)
+# rma(yi=betas_mat[1,], sei=se_mat[1,], method="FE")
+# rma(yi=betas_mat[2,], sei=se_mat[2,], method="FE")
+
+# fixed_effects_meta(betas, se)
+
+
+generate_tophit_probs <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1), max_snps=2000){
+  set.seed(seed)
+  causalsnp <- which(tempmap$snp == snp)
+  print(causalsnp)
+  tempmap$causal <- 1:nrow(tempmap) == causalsnp
+  min_coord <- max(1, round(causalsnp - (max_snps/2)))
+  max_coord <- min(nrow(tempmap), round(causalsnp + (max_snps/2)))
+  message(min_coord, "-", max_coord)
+  tempmap <- tempmap[min_coord:max_coord,]
+  causalsnp <- which(tempmap$causal)
+  message("Number of SNPs: ", nrow(tempmap))
+  # tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
+  beta <- b_from_pafn(pval, tempmap$af[tempmap$causal], nEUR)
+  tempmap$beta <- 0
+  tempmap$beta[tempmap$causal] <- beta
+  xvar <- tempmap$af * (1-tempmap$af) * 2
+  eurld <- subset_ldobj(ldobjs$EUR, tempmap$snp)
+  tempmap$beta_ld <- (diag(1/xvar) %*% eurld$ld %*% diag(xvar) %*% tempmap$beta) %>% drop()
+  tempmap$ld <- eurld$ld[causalsnp, ]
+  #tempmap$beta_ld <- beta * sign(tempmap$ld) * tempmap$ld^2
+  tempmap$se <- expected_se(tempmap$beta_ld, tempmap$af, nEUR, 1)
+  semat <- diag(tempmap$se) %*% eurld$ld %*% diag(tempmap$se)
+  bhat <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld, Sigma=semat)
+  fval <- (t(bhat) / tempmap$se)^2
+  topsnp <- tempmap$snp[apply(fval, 2, function(x) which.max(x))]
+  tempmap$ord <- 1:nrow(tempmap)
+  tempmap <- prop.table(table(topsnp)) %>% as_tibble %>% dplyr::select(snp=topsnp, prob_tophit=n) %>% left_join(tempmap, .) %>% arrange(ord)
+  tempmap$prob_tophit[is.na(tempmap$prob_tophit)] <- 0
+  print(dim(fval))
+  print(fval[1:10,1:10])
+  semat <- diag(tempmap$se) %*% eurld$ld %*% diag(tempmap$se)
+  bhat <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld, Sigma=semat)
+  fval <- (t(bhat) / tempmap$se)^2
+  topsnp <- tempmap$snp[apply(fval, 2, function(x) which.max(x))]
+  tempmap$ord <- 1:nrow(tempmap)
+  tempmap <- prop.table(table(topsnp)) %>% as_tibble %>% dplyr::select(snp=topsnp, prob_tophit=n) %>% left_join(tempmap, .) %>% arrange(ord)
+  tempmap$prob_tophit[is.na(tempmap$prob_tophit)] <- 0
+  return(tempmap)
+}
+
+
+generate_tophit_probs_ma <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1), max_snps=2000, prop_afr){
+  set.seed(seed)
+  causalsnp <- which(tempmap$snp == snp)
+  print(causalsnp)
+  tempmap$causal <- 1:nrow(tempmap) == causalsnp
+  min_coord <- max(1, round(causalsnp - (max_snps/2)))
+  max_coord <- min(nrow(tempmap), round(causalsnp + (max_snps/2)))
+  message(min_coord, "-", max_coord)
+  tempmap <- tempmap[min_coord:max_coord,]
+  causalsnp <- which(tempmap$causal)
+  message("Number of SNPs: ", nrow(tempmap))
+  # tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
+  beta <- b_from_pafn(pval, tempmap$af[tempmap$causal], nEUR)
+  tempmap$beta <- 0
+  tempmap$beta[tempmap$causal] <- beta
+  xvar <- tempmap$af * (1-tempmap$af) * 2
+  eurld <- subset_ldobj(ldobjs$EUR, tempmap$snp)
+  tempmap$beta_ld <- (diag(1/xvar) %*% eurld$ld %*% diag(xvar) %*% tempmap$beta) %>% drop()
+  tempmap$ld <- eurld$ld[causalsnp, ]
+  #tempmap$beta_ld <- beta * sign(tempmap$ld) * tempmap$ld^2
+  tempmap$se <- expected_se(tempmap$beta_ld, tempmap$af, nEUR * (1-prop_afr), 1)
+
+  # add x% african sample 
+  afrld <- subset_ldobj(ldobjs$AFR, tempmap$snp)
+  xvar_afr <- afrld$map$af * (1-afrld$map$af) * 2
+  tempmap$beta_ld_afr <- (diag(1/xvar_afr) %*% afrld$ld %*% diag(xvar_afr) %*% tempmap$beta) %>% drop()
+  tempmap$ld_afr <- afrld$ld[causalsnp, ]
+  #tempmap$beta_ld <- beta * sign(tempmap$ld) * tempmap$ld^2
+  tempmap$se_afr <- expected_se(tempmap$beta_ld_afr, afrld$map$af, nEUR * prop_afr, 1)
+  semat_eur <- diag(tempmap$se) %*% eurld$ld %*% diag(tempmap$se)
+  semat_afr <- diag(tempmap$se_afr) %*% afrld$ld %*% diag(tempmap$se_afr)
+  bhat_eur <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld, Sigma=semat_eur)
+  bhat_afr <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld_afr, Sigma=semat_afr)
+
+  fval <- sapply(1:ntry, function(i){
+    o <- fema(cbind(bhat_eur[i, ], bhat_afr[i,]), cbind(tempmap$se, tempmap$se_afr))
+    (o$beta/o$se)^2
+  })
+  topsnp <- tempmap$snp[apply(fval, 2, function(x) which.max(x))]
+  tempmap$ord <- 1:nrow(tempmap)
+  tempmap <- prop.table(table(topsnp)) %>% as_tibble %>% dplyr::select(snp=topsnp, prob_tophit=n) %>% left_join(tempmap, .) %>% arrange(ord)
+  tempmap$prob_tophit[is.na(tempmap$prob_tophit)] <- 0
+  return(tempmap)
+}
+
+eval_tophit_probs <- function(ldobjs, tm) {
+  r2 <- sapply(ldobjs, function(x){
+    x <- subset_ldobj(x, tm$snp)$ld[tm$causal,]^2
+    sum(x * tm$prob_tophit) / sum(tm$prob_tophit)
+  })
+  af <- sapply(ldobjs, function(x){
+    x <- subset_ldobj(x, tm$snp)$map$af[tm$causal]
+    sum(x * tm$prob_tophit) / sum(tm$prob_tophit)
+  })
+  frac_causal <- sapply(ldobjs, function(x){
+    x <- subset_ldobj(x, tm$snp)$prob[tm$causal,]
+  })
+  # r2 = average rsq of the detected hits with the causal variant
+  # af = average allele frequency of the detected hits
+  # n_nonzero = number of variants with non-zero chance of being selected
+  # causal_prob = probability of the causal variant being selected
+  tib <- tibble(snp=tm$snp[tm$causal], pop=names(r2), r2=r2, af=af, n_nonzero = NA, causal_prob = NA)
+  tib$n_nonzero[tib$pop == "EUR"] <- sum(tm$prob_tophit != 0)
+  tib$causal_prob[tib$pop == "EUR"] <- tm$prob_tophit[tm$causal]
+  return(tib)
+}
+
 
 main()

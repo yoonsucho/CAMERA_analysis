@@ -15,6 +15,7 @@ library(ggplot2)
 
 load("inst_interaction_sim1.rdata")
 load("inst_interaction_sim2.rdata")
+load("inst_interaction_sim3.rdata")
 class(res)
 dim(res)
 res <- as_tibble(res)
@@ -82,27 +83,47 @@ res2 %>%
 ```
 
 ```{r}
-res2 %>%
+res3 %>%
     filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0, biv_m==0) %>%
     group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
     summarise(pow=sum(pval < 0.05)/n(), bias=mean(b-biv_m), mse=mean((b-biv_m)^2)) %>%
     ggplot(., aes(x=npop, y=pow)) +
-        geom_point(aes(colour=as.factor(npop))) +
-        geom_line(aes(colour=as.factor(npop))) +
+        geom_point() +
+        geom_line() +
         facet_grid(max_ratio ~ ., labeller=label_both) +
         scale_colour_brewer() +
         theme(axis.text.x=element_text(angle=90))
 ```
 
+```{r}
+res3 %>%
+    filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0, biv_m==0) %>%
+    group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
+    summarise(pow=sum(pval < 0.05)/n(), bias=mean(b-biv_m), mse=mean((b-biv_m)^2)) %>%
+    ggplot(., aes(x=npop, y=bias)) +
+        geom_point() +
+        geom_line() +
+        facet_grid(max_ratio ~ ., labeller=label_both) +
+        scale_colour_brewer() +
+        theme(axis.text.x=element_text(angle=90))
+
+```
 
 
 ```{r}
-res2 %>%
+res3 %>%
     filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0) %>%
     group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
     mutate(bias=(b-biv_m)^2) %>%
-    {summary(lm(bias ~ npop + max_ratio + biv_m, .))}
+    {summary(lm(bias ~ npop + max_ratio, .))}
+```
 
+```{r}
+res3 %>%
+    filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0) %>%
+    group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
+    mutate(pow=sum(pval < 0.05)/n(), bias=(b-biv_m)^2) %>%
+    {summary(lm(pow ~ npop + max_ratio, .))}
 ```
 
 Summary
