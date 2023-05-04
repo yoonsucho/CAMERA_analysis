@@ -62,8 +62,14 @@ Setup `config.json` like:
 }
 ```
 
-1. Install `snakemake`
+1. Install `snakemake` e.g. 
+    ```
+    conda env create -f env.yaml
+    conda activate snakemakemin
+    ```
 2. Install renv package and then restore using `renv::restore()`
+
+
 
 ```
 snakemake
@@ -83,6 +89,7 @@ snakemake -prk \
   --cpus-per-task={cluster.ncpu} \
   --time={cluster.time} \
   --mem={cluster.mem} \
+  --account={cluster.account} \
   --output={cluster.output}"
 ```
 

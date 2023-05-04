@@ -8,7 +8,8 @@
             "ntask": "1",
             "time": "05:00:00",
             "mem": "10G",
-            "output": "job_reports/{rule}.out"
+            "output": "job_reports/{rule}.out",
+            "account": "smed001801"
     },
     "whole_genome_ld_loss" :
     {

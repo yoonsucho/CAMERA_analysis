@@ -15,7 +15,7 @@ regions = list(region[3])
 
 rule all:
     input:
-        expand("{outdir}/results.rdata", outdir=outdir)
+        expand("{outdir}/results2.rdata", outdir=outdir)
 
 rule download_ld_ref:
     output:
@@ -32,16 +32,17 @@ rule download_ld_ref:
 rule whole_genome_ld_loss:
     input:
         "data/gwashits.rdata",
+        "whole_genome_ld_loss.r",
         expand("{datadir}/EUR.bed", datadir=datadir)
     output:
-        "{outdir}/{regions}/result.rdata"
+        "{outdir}/{regions}/result2.rdata"
     shell:
         "Rscript whole_genome_ld_loss.r {wildcards.regions}"
 
 rule aggregate:
     input:
-        expand("{outdir}/{regions}/result.rdata", outdir=outdir, regions=regions)
+        expand("{outdir}/{regions}/result2.rdata", outdir=outdir, regions=regions)
     output:
-        "{outdir}/results.rdata"
+        "{outdir}/results2.rdata"
     script:
         "aggregate.r"

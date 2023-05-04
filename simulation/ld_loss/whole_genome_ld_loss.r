@@ -1,24 +1,29 @@
+here::i_am("simulation/ld_loss/whole_genome_ld_loss.r")
+library(here)
 library(simulateGP)
 library(dplyr)
-library(here)
 library(jsonlite)
 
 main <- function()
 {
-  print("HELLOOO")
   ## Input
   config <- jsonlite::read_json("config.json")
   ld_data_dir <- config$ld_data_dir
   # region_code <- "12_106958748_109025901"
   region_code <- commandArgs(T)[1]
-  outdir <- file.path(config$outdir, region_code)
+  outdir <- here("simulation", "ld_loss", config$outdir, region_code)
+  if(file.exists(file.path(outdir, "result2.rdata"))) 
+  {
+    message("file already exists")
+    q()
+  }
   dir.create(outdir, recursive=TRUE)
   pops <- c("EUR", "EAS", "SAS", "AFR", "AMR")
   ldobjs <- generate_ldobjs(region_code, outdir, ld_data_dir, pops)
   tempmap <- ldobjs[["EUR"]]$map
   tempmap$ldscore <- colSums(ldobjs$EUR$ld^2)
 
-  load(here("data","gwashits.rdata"))
+  load(here("simulation", "ld_loss", "data","gwashits.rdata"))
   gwashits <- subset(gwashits, code %in% region_code & rsid %in% tempmap$snp)
   matched <- match_maf_ldscore(tempmap, gwashits$rsid) %>%
     left_join(., gwashits, by=c("target"="rsid")) %>%
@@ -39,14 +44,13 @@ main <- function()
       eval_tophit_probs(ldobjs, tempmap3) %>% mutate(prop_afr=0.5, pval=snplist$p[i], n=snplist$n[i])
     )
   }) %>% bind_rows() %>% mutate(region=region_code)
-  save(snplist, res, file=file.path(outdir, "result.rdata"))
+  save(snplist, res, file=file.path(outdir, "result2.rdata"))
   unlink(file.path(outdir, pops), recursive=TRUE)
 }
 
 # For a list of snps find SNPs that match on MAF and LD Score
 # Return a data frame of each target SNP and a list of nmatch matching SNPs
-match_maf_ldscore <- function(tempmap, snp, bins=10, nmatch=5)
-{
+match_maf_ldscore <- function(tempmap, snp, bins=10, nmatch=5) {
   tempmap$ldscore_bin <- cut(tempmap$ldscore, bins)
   tempmap$maf <- tempmap$af
   tempmap$maf[tempmap$maf > 0.5] <- 1 - tempmap$maf[tempmap$maf > 0.5]
@@ -62,8 +66,7 @@ match_maf_ldscore <- function(tempmap, snp, bins=10, nmatch=5)
   }) %>% bind_rows()
 }
 
-generate_ldobjs <- function(region_code, outdir, ld_data_dir, pops = c("EUR", "EAS", "SAS", "AFR", "AMR"))
-{
+generate_ldobjs <- function(region_code, outdir, ld_data_dir, pops = c("EUR", "EAS", "SAS", "AFR", "AMR")) {
   region <- system.file("extdata/ldetect/EUR.bed", package = "simulateGP") %>% 
     data.table::fread(., header = TRUE) %>% 
     dplyr::mutate(
@@ -91,16 +94,14 @@ generate_ldobjs <- function(region_code, outdir, ld_data_dir, pops = c("EUR", "E
   return(ldobjs)
 }
 
-subset_ldobj <- function(ldobj, snps)
-{
+subset_ldobj <- function(ldobj, snps) {
   i <- which(ldobj$map$snp %in% snps)
   ldobj$map <- ldobj$map[i,]
   ldobj$ld <- ldobj$ld[i,i]
   return(ldobj)
 }
 
-organise_ldobj <- function(dirlist, region)
-{
+organise_ldobj <- function(dirlist, region) {
   ld <- lapply(dirlist, readRDS)
   snplist <- Reduce(intersect, lapply(ld, function(x) x$map$snp))
   ld <- lapply(ld, function(x) subset_ldobj(x, snplist))
@@ -108,23 +109,20 @@ organise_ldobj <- function(dirlist, region)
   return(ld)
 }
 
-b_from_pafn <- function(pval, af, n)
-{
+b_from_pafn <- function(pval, af, n) {
   tval <- qnorm(pval, low=F)
   rsq <- tval^2 / (tval^2 + n)
   beta <- sqrt(rsq / (2*af*(1-af)))
   beta
 }
 
-prob_y_gt_x <- function(m1, se1, m2, se2)
-{
+prob_y_gt_x <- function(m1, se1, m2, se2) {
   m <- m1 - m2
   se <- se1^2 + se2^2
   pnorm(0, m, sqrt(se), low=F)
 }
 
-tophit_cross_ancestry_ld_loss <- function(tempmap, snp, pval, nEUR, ldobjs)
-{
+tophit_cross_ancestry_ld_loss <- function(tempmap, snp, pval, nEUR, ldobjs) {
   causalsnp <- which(tempmap$snp == snp)
   tempmap$causal <- 1:nrow(tempmap) == causalsnp
   tempmap$ld <- ldobjs$EUR$ld[causalsnp, ]
@@ -146,8 +144,7 @@ tophit_cross_ancestry_ld_loss <- function(tempmap, snp, pval, nEUR, ldobjs)
   return(list(tempmap, tibble(snp=tempmap$snp[tempmap$causal], pop=names(r2), r2=r2, af=af)))
 }
 
-tophit_cross_ancestry_ld_loss_empirical_error <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1))
-{
+tophit_cross_ancestry_ld_loss_empirical_error <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1)) {
   set.seed(seed)
   causalsnp <- which(tempmap$snp == snp)
   tempmap$causal <- 1:nrow(tempmap) == causalsnp
@@ -186,8 +183,7 @@ tophit_cross_ancestry_ld_loss_empirical_error <- function(tempmap, snp, pval, nE
   return(list(tempmap, tib))
 }
 
-tophit_cross_ancestry_ld_loss_empirical <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1), max_snps=2000)
-{
+tophit_cross_ancestry_ld_loss_empirical <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000, seed=sample(1:100000, 1), max_snps=2000) {
   print(str(tempmap))
   set.seed(seed)
   causalsnp <- which(tempmap$snp == snp)
@@ -287,8 +283,6 @@ generate_tophit_probs <- function(tempmap, snp, pval, nEUR, ldobjs, ntry = 10000
   tempmap$ord <- 1:nrow(tempmap)
   tempmap <- prop.table(table(topsnp)) %>% as_tibble %>% dplyr::select(snp=topsnp, prob_tophit=n) %>% left_join(tempmap, .) %>% arrange(ord)
   tempmap$prob_tophit[is.na(tempmap$prob_tophit)] <- 0
-  print(dim(fval))
-  print(fval[1:10,1:10])
   semat <- diag(tempmap$se) %*% eurld$ld %*% diag(tempmap$se)
   bhat <- MASS::mvrnorm(ntry, mu=tempmap$beta_ld, Sigma=semat)
   fval <- (t(bhat) / tempmap$se)^2
