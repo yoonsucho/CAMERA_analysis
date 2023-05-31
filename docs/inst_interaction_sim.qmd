@@ -1,7 +1,10 @@
 ---
 title: Simulations for interaction method
 author: Gibran Hemani
-date: "`r Sys.date()`"
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
 ---
 
 
@@ -12,10 +15,11 @@ The interaction model aims to maximise power when effects are shared, and estima
 ```{r}
 library(dplyr)
 library(ggplot2)
+library(here)
 
-load("inst_interaction_sim1.rdata")
-load("inst_interaction_sim2.rdata")
-load("inst_interaction_sim3.rdata")
+load(here("simulation", "interaction", "inst_interaction_sim1.rdata"))
+load(here("simulation", "interaction", "inst_interaction_sim2.rdata"))
+load(here("simulation", "interaction", "inst_interaction_sim3.rdata"))
 class(res)
 dim(res)
 res <- as_tibble(res)
