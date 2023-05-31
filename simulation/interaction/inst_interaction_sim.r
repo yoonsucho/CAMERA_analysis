@@ -257,7 +257,7 @@ res3 <- mclapply(1:nrow(param3), function(i)
     message(i)
     sigma <- matrix(param3$rg[i], param3$npop[i], param3$npop[i])
     diag(sigma) <- 1
-    true_biv <- tibble(pop=as.character(1:param$npop[i]), biv=rnorm(param$npop[i], 
+    true_biv <- tibble(pop=as.character(1:param$npop[i]), biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]))
     af <- lapply(1:param3$npop[i], function(i) runif(param3$nsnp[i], 0.01, 0.99))
     nid <- sample_size(param3$nid[i], param3$npop[i], param3$max_ratio[i])
     sim1(nsnp=param3$nsnp[i], hsq=rep(param3$hsq[i], param3$npop[i]), sigma=sigma, nid=nid, af=af, biv=true_biv$biv, rep(5e-8, param3$npop[i])) %>%
