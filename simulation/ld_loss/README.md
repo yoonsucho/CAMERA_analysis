@@ -70,7 +70,6 @@ Setup `config.json` like:
 2. Install renv package and then restore using `renv::restore()`
 
 
-
 ```
 snakemake
 ```
