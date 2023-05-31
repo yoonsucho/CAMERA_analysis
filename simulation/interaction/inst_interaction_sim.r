@@ -203,10 +203,12 @@ res <- mclapply(1:nrow(param), function(i)
     message(i)
     sigma <- matrix(param$rg[i], param$npop[i], param$npop[i])
     diag(sigma) <- 1
+    true_biv <- tibble(pop=as.character(1:param$npop[i]), biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]))
     af <- lapply(1:param$npop[i], function(i) runif(param$nsnp[i], 0.01, 0.99))
     nid <- sample_size(param$nid[i], param$npop[i], param$max_ratio[i])
-    sim1(nsnp=param$nsnp[i], hsq=rep(param$hsq[i], param$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]), rep(5e-8, param$npop[i])) %>%
-    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param[i,], .)
+    sim1(nsnp=param$nsnp[i], hsq=rep(param$hsq[i], param$npop[i]), sigma=sigma, nid=nid, af=af, biv=true_biv$biv, rep(5e-8, param$npop[i])) %>%
+    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param[i,], .) %>% 
+    left_join(., true_biv, by="pop")
 }, mc.cores=40) %>% bind_rows()
 save(res, file="inst_interaction_sim1.rdata")
 
@@ -228,10 +230,12 @@ res2 <- mclapply(1:nrow(param2), function(i)
     message(i)
     sigma <- matrix(param2$rg[i], param2$npop[i], param2$npop[i])
     diag(sigma) <- 1
+    true_biv <- tibble(pop=as.character(1:param$npop[i]), biv=rnorm(param$npop[i], param$biv_m[i], param$biv_sd[i]))
     af <- lapply(1:param2$npop[i], function(i) runif(param2$nsnp[i], 0.01, 0.99))
     nid <- sample_size(param2$nid[i], param2$npop[i], param2$max_ratio[i])
-    sim1(nsnp=param2$nsnp[i], hsq=rep(param2$hsq[i], param2$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param2$npop[i], param2$biv_m[i], param2$biv_sd[i]), rep(5e-8, param2$npop[i])) %>%
-    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param2[i,], .)
+    sim1(nsnp=param2$nsnp[i], hsq=rep(param2$hsq[i], param2$npop[i]), sigma=sigma, nid=nid, af=af, biv=true_biv$biv, rep(5e-8, param2$npop[i])) %>%
+    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param2[i,], .) %>%
+    left_join(., true_biv, by="pop")
 }, mc.cores=40) %>% bind_rows()
 save(res2, file="inst_interaction_sim2.rdata")
 
@@ -253,10 +257,12 @@ res3 <- mclapply(1:nrow(param3), function(i)
     message(i)
     sigma <- matrix(param3$rg[i], param3$npop[i], param3$npop[i])
     diag(sigma) <- 1
+    true_biv <- tibble(pop=as.character(1:param$npop[i]), biv=rnorm(param$npop[i], 
     af <- lapply(1:param3$npop[i], function(i) runif(param3$nsnp[i], 0.01, 0.99))
     nid <- sample_size(param3$nid[i], param3$npop[i], param3$max_ratio[i])
-    sim1(nsnp=param3$nsnp[i], hsq=rep(param3$hsq[i], param3$npop[i]), sigma=sigma, nid=nid, af=af, biv=rnorm(param3$npop[i], param3$biv_m[i], param3$biv_sd[i]), rep(5e-8, param3$npop[i])) %>%
-    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param3[i,], .)
+    sim1(nsnp=param3$nsnp[i], hsq=rep(param3$hsq[i], param3$npop[i]), sigma=sigma, nid=nid, af=af, biv=true_biv$biv, rep(5e-8, param3$npop[i])) %>%
+    int_analysis %>% dplyr::select(-c(npop, nsnp)) %>% bind_cols(param3[i,], .) %>% 
+    left_join(., true_biv, by="pop")
 }, mc.cores=40) %>% bind_rows()
 save(res3, file="inst_interaction_sim3.rdata")
 

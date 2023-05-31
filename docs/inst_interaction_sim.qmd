@@ -130,7 +130,16 @@ res3 %>%
     {summary(lm(pow ~ npop + max_ratio, .))}
 ```
 
+
+## Interaction test
+
+```{r}
+resp <- subset(res, pop != "all")
+resp
+```
+
 Summary
 
 - Larger number of populations improves ability to estimate heterogeneity
+- Many methods give exactly the same results (e.g. AIC, nested ANOVA, FE meta analysis). But avoid jtest
 - 
