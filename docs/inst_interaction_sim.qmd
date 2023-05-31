@@ -84,6 +84,13 @@ res2 %>%
         scale_colour_brewer() +
         theme(axis.text.x=element_text(angle=90))
 
+res2 %>%
+    filter(method %in% c("FE meta analysis"), pop=="all", biv_sd==0) %>%
+    # group_by(method, biv_sd, npop, max_ratio) %>%
+    ggplot(., aes(x=as.factor(npop), y=b-biv_m)) +
+        geom_boxplot(aes(fill=as.factor(max_ratio))) +
+        scale_colour_brewer() +
+        theme(axis.text.x=element_text(angle=90))
 ```
 
 ```{r}
@@ -133,13 +140,25 @@ res3 %>%
 
 ## Interaction test
 
+Todo
+
 ```{r}
 resp <- subset(res, pop != "all")
-resp
+resp %>% 
+    group_by(method, biv_sd, biv_m, npop, max_ratio) %>%
+    summarise(pow=sum(pval < 0.05)/n(), bias=mean(b-biv_m), mse=mean((b-biv_m)^2)) %>%
+    ggplot(., aes(x=biv_m, y=bias)) +
+        geom_point(aes(colour=method, shape=as.factor(biv_sd))) +
+        geom_line(aes(colour=method, linetype=as.factor(biv_sd))) +
+        facet_grid(npop ~ max_ratio, labeller=label_both) +
+        scale_colour_brewer(type="qual") +
+        theme(axis.text.x=element_text(angle=90))
 ```
 
 Summary
 
 - Larger number of populations improves ability to estimate heterogeneity
 - Many methods give exactly the same results (e.g. AIC, nested ANOVA, FE meta analysis). But avoid jtest
-- 
+- More populations seems to introduce some weak instrument bias
+- Differential sample size doesn't introduce bias or drastically change power
+

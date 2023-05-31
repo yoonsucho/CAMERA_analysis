@@ -1,7 +1,10 @@
 ---
-title: "Initial analysis of LD loss simulations
+title: "Initial analysis of LD loss simulations"
 author: "Gibran Hemani"
-date: `r Sys.Date()`
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
 ---
 
 LD loss analysis asks
@@ -24,7 +27,7 @@ Analysis:
 
 ```{r}
 library(here)
-renv::activate(here(".."))
+# renv::activate(here(".."))
 library(dplyr)
 library(ggplot2)
 library(lmerTest)
@@ -37,6 +40,7 @@ load(here("../output_set1/results.rdata"))
 # remove duplicate SNPs
 
 res <- res[!duplicated(paste(res$snp, res$pop, res$pval)),]
+res$rsidcode <- paste(res$snp, res$pval)
 all(table(paste(res$snp, res$pval)) == 5)
 dim(res)
 ```
@@ -570,7 +574,7 @@ For equal sample size. How is power determined? Relates to R2 and sample size...
 
 ```{r}
 ratios %>%
-  filter(rsq_ratio > quantile(rsq_ratio, 0.05) & rsq_ratio < quantile(rsq_ratio, 0.95)) %>%
+  filter(rsq_ratio > quantile(rsq_ratio, 0.05, na.rm=T) & rsq_ratio < quantile(rsq_ratio, 0.95, na.rm=T)) %>%
   ggplot(., aes(y=rsq_ratio, x=pop)) +
     geom_violin() +
     scale_y_log10()

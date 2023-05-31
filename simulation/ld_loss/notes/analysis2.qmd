@@ -1,0 +1,78 @@
+---
+title: "LD loss simulations with meta analysis"
+author: "Gibran Hemani"
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
+---
+
+LD loss analysis asks
+
+Simulations:
+
+1. For a causal variant being discovered in European datasets, what are the possible top GWAS hits
+2. What is the probability of each SNP being top hit in the region
+3. What is the average expected LD between causal variant and European-discovered top hit in non-Europeans
+4. What is the difference in allele frequencies between Eur and non-Eur for the Eur top hit
+
+Analysis:
+
+5. Are the known GWAS hits giving a different cross-population result from other LD/MAF matched SNPs
+6. What is expected influence on MR
+  - Using European bgx against non-European bgy
+  - Using re-estimated bgx against bgy in non-Europeans
+  - Consider bias due to LD, weak instrument bias, power
+
+
+Now allow the initial discovery GWAS to be a meta-analysis with EUR and AFR. Does it improve the LD loss in other populations?
+
+
+```{r}
+library(here)
+renv::activate(here(".."))
+library(dplyr)
+library(ggplot2)
+library(lmerTest)
+library(lme4)
+library(simulateGP)
+```
+
+```{r}
+load(here("../output_set1/results2.rdata"))
+# remove duplicate SNPs
+
+res <- res[!duplicated(paste(res$snp, res$pop, res$pval, res$prop_afr)),]
+res$rsidcode <- paste(res$snp, res$pval)
+table(table(paste(res$snp, res$pval)))
+dim(res)
+```
+
+LD loss
+
+The sample size doesn't have much impact on the decay of LD. But the discovery p-value has a big impact it seems - at least on an absolute scale
+
+```{r}
+res %>% 
+  mutate(pvalbin = cut(-log10(pval), 5)) %>%
+  ggplot(., aes(y=r2, x=as.factor(pop))) +
+  geom_boxplot(aes(fill=as.factor(prop_afr))) +
+  facet_grid(. ~ pvalbin) +
+  scale_fill_brewer(type="seq")
+```
+
+
+```{r}
+ress <- res %>% 
+  ungroup() %>%
+  mutate(pvalbin = cut(-log10(pval), 5)) %>%
+  group_by(pop, prop_afr, pvalbin) %>%
+  summarise(uci=quantile(r2, 0.975, na.rm=T), lci=quantile(r2, 0.025, na.rm=T), r2=mean(r2, na.rm=T))
+ress %>%
+  ggplot(., aes(y=r2, x=as.factor(pop))) +
+  geom_point(aes(colour=as.factor(prop_afr)), position=position_dodge(width=0.7)) +
+  geom_errorbar(aes(ymin=lci, ymax=uci, colour=as.factor(prop_afr)), position=position_dodge(width=0.7), width=0) +
+  facet_grid(. ~ pvalbin) +
+  scale_colour_brewer(type="seq")
+```
+
