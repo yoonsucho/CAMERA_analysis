@@ -1,0 +1,48 @@
+
+
+rule all:
+
+
+rule download_summary_data:
+    input: download_summary_data.r
+    output:
+        summary_metadata.rds
+    run:
+        Rscript download_summary_data.r
+
+
+rule download_ldref:
+    output: ../../data/stroke_ldl/ref/AFR.bed
+    run:
+        """
+        mkdir -p ../../data/stroke_ldl/ref
+        cd ../../data/stroke_ldl/ref
+        wget http://fileserve.mrcieu.ac.uk/ld/1kg.v3.tgz
+        tar xzvf 1kg.v3.tgz
+        rm 1kg.v3.tgz
+        """
+
+rule recode_ref:
+    input:
+        ../../data/stroke_ldl/ref/AFR.bim
+    output:
+        ../../data/stroke_ldl/ref/AFR_vid.bim
+    run:
+        """
+        Rscript variant_ids.r ../../data/stroke_ldl/ref/AFR ../../data/stroke_ldl/ref/AFR_vid
+        Rscript variant_ids.r ../../data/stroke_ldl/ref/EUR ../../data/stroke_ldl/ref/EUR_vid
+        Rscript variant_ids.r ../../data/stroke_ldl/ref/EAS ../../data/stroke_ldl/ref/EAS_vid
+        Rscript variant_ids.r ../../data/stroke_ldl/ref/SAS ../../data/stroke_ldl/ref/SAS_vid
+        Rscript variant_ids.r ../../data/stroke_ldl/ref/AMR ../../data/stroke_ldl/ref/AMR_vid
+        """
+
+rule organise_summary_data:
+    input:
+        ../../data/stroke_ldl/summary_metadata.rds,
+        ../../data/stroke_ldl/ref/AFR_vid.bim
+    output:
+        ../../data/stroke_ldl/organised_summary_data.rds
+    run:
+        Rscript organise_summary_data.r
+
+
