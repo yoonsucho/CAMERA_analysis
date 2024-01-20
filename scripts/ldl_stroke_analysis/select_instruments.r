@@ -5,22 +5,22 @@ join
 
 subset(a, trait == "LDL", select=c(vid, pop, beta)) %>% tidyr::pivot_wider(id_cols=vid, names_from=pop, values_from=beta)
 
-make_matrices <- function(a) {
-    traits <- unique(a$trait)
-    pops <- unique(a$pop)
-    lapply(traits, \(tr) {
-        lapply(c("beta", "se", ))
-        subset(a, trait == tr, select=c("vid")) %>%
+# make_matrices <- function(a) {
+#     traits <- unique(a$trait)
+#     pops <- unique(a$pop)
+#     lapply(traits, \(tr) {
+#         lapply(c("beta", "se", ))
+#         subset(a, trait == tr, select=c("vid")) %>%
 
-    })
+#     })
 
-    for(i in 1:length(traits)) {
-        l1[[i]] <- list()
-        for(j in 1:length(pops)) {
+#     for(i in 1:length(traits)) {
+#         l1[[i]] <- list()
+#         for(j in 1:length(pops)) {
 
-        }
-    }
-}
+#         }
+#     }
+# }
 
 
 z_meta_analysis <- function(beta_mat, se_mat, n, eaf_mat) {

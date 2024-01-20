@@ -1,19 +1,18 @@
-
-
 rule all:
-
+    input:
+        "quick_mr.html"
 
 rule download_summary_data:
-    input: download_summary_data.r
+    input: "download_summary_data.r"
     output:
-        summary_metadata.rds
-    run:
-        Rscript download_summary_data.r
+        "summary_metadata.rds"
+    script:
+        "download_summary_data.r"
 
 
 rule download_ldref:
-    output: ../../data/stroke_ldl/ref/AFR.bed
-    run:
+    output: "../../data/stroke_ldl/ref/AFR.bed"
+    shell:
         """
         mkdir -p ../../data/stroke_ldl/ref
         cd ../../data/stroke_ldl/ref
@@ -24,10 +23,10 @@ rule download_ldref:
 
 rule recode_ref:
     input:
-        ../../data/stroke_ldl/ref/AFR.bim
+        "../../data/stroke_ldl/ref/AFR.bim"
     output:
-        ../../data/stroke_ldl/ref/AFR_vid.bim
-    run:
+        "../../data/stroke_ldl/ref/AFR_vid.bim"
+    shell:
         """
         Rscript variant_ids.r ../../data/stroke_ldl/ref/AFR ../../data/stroke_ldl/ref/AFR_vid
         Rscript variant_ids.r ../../data/stroke_ldl/ref/EUR ../../data/stroke_ldl/ref/EUR_vid
@@ -38,11 +37,18 @@ rule recode_ref:
 
 rule organise_summary_data:
     input:
-        ../../data/stroke_ldl/summary_metadata.rds,
-        ../../data/stroke_ldl/ref/AFR_vid.bim
+        "../../data/stroke_ldl/summary_metadata.rds",
+        "../../data/stroke_ldl/ref/AFR_vid.bim"
     output:
-        ../../data/stroke_ldl/organised_summary_data.rds
-    run:
-        Rscript organise_summary_data.r
+        "../../data/stroke_ldl/organised_summary_data.rds"
+    script:
+        "organise_summary_data.r"
 
-
+rule quick_mr:
+    input:
+        "../../data/stroke_ldl/organised_summary_data.rds",
+        "quick_mr.rmd"
+    output:
+        "quick_mr.html"
+    script:
+        "quick_mr.rmd"
