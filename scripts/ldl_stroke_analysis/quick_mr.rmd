@@ -58,11 +58,10 @@ modcomp
 Plot results
 
 ```{r}
-p <- as_tibble(smod2$coef) %>% mutate(pop = levels(as.factor(dat$pop))) %>%
+as_tibble(smod2$coef) %>% mutate(pop = levels(as.factor(dat$pop))) %>%
     ggplot(., aes(x=Estimate, y=pop)) +
     geom_point() +
     geom_errorbarh(aes(xmin=Estimate - `Std. Error` * 1.96, xmax=Estimate + `Std. Error` * 1.96), height=0) +
     geom_vline(xintercept=0, linetype="dotted")
-ggsave(p, file="temp.png")
 ```
 
