@@ -40,3 +40,13 @@ stopifnot(all(ch))
 bim$V2 <- paste0(bim$V1, ":", bim$V4, "_", bim$V5, "_", bim$V6)
 
 data.table::fwrite(bim, file=paste0(outfile, ".bim"), quote=FALSE, col.names=FALSE, sep=" ")
+
+dups <- subset(bim, duplicated(V2))$V2 %>% unique()
+if(length(dups) > 0) {
+    message("found ", length(dups), " duplicates")
+    tf <- tempfile()
+    write.table(dups, tf, row=F, col=F, qu=F)
+    glue(
+        "plink2 --bfile {outfile} --exclude {tf} --make-bed --out {outfile}"
+    ) %>% system()
+}

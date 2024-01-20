@@ -23,8 +23,8 @@ t <- lapply(d, \(x) {
         beta_col = 4,
         se_col = 5,
         pval_col = 6, 
-        ea_col = 9,
-        oa_col = 10,
+        ea_col = 10,
+        oa_col = 11,
         units = "logOR"
     )
 }) %>% bind_rows() %>%
@@ -85,3 +85,5 @@ lapply(ldl$url[1], \(x) download.file(url=x, destfile = here("data", "stroke_ldl
 metadata <- bind_rows(ldl, t)
 metadata
 saveRDS(metadata, file=here("data", "stroke_ldl", "metadata.rds"))
+
+
