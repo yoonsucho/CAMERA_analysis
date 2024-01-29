@@ -94,13 +94,18 @@ pool_tophits <- function(rawdat, tophits, metadata, radius = 250000, pthresh = 5
             bind_rows()
     }) %>% bind_rows()
 
+    region_list <- lapply(region_list, as_tibble)
+
     out <- list(region_list=region_list, region_extract=region_extract, tophit_pool=pool)
     return(out)
 }
 
-organise_data <- function(metadata, plink_bin, ld_ref, pthresh=5e-8, minmaf = 0.01, radius = 250000, mc.cores = 1) {
+organise_data <- function(metadata,  plink_bin, ld_ref, pthresh=5e-8, minmaf = 0.01, radius = 250000, mc.cores = 1, rawdat=NULL) {
     # read in data
-    rawdat <- mclapply(1:nrow(metadata), \(i) read_file(metadata[i,]))
+
+    if(is.null(rawdat)) {
+        rawdat <- mclapply(1:nrow(metadata), \(i) read_file(metadata[i,]))
+    }
 
     # get top hits for each
     tophits <- lapply(1:nrow(metadata), \(i) {
@@ -109,7 +114,7 @@ organise_data <- function(metadata, plink_bin, ld_ref, pthresh=5e-8, minmaf = 0.
             filter(pval < pthresh) %>%
             mutate(rsid = vid)
         if(nrow(x) > 1) {
-            ieugwasr::ld_clump(x, plink_bin=plink_bin, bfile=subset(ldref, pop == metadata$pop[i]))$bfile %>%
+            ieugwasr::ld_clump(x, plink_bin=plink_bin, bfile=subset(ld_ref, pop == metadata$pop[i])$bfile) %>%
                 select(-c(rsid)) %>%
                 mutate(pop=metadata$pop[i], trait=metadata$trait[i])
         } else {
@@ -136,10 +141,26 @@ fixed_effects_meta_analysis_fast <- function(beta_mat, se_mat) {
 
 metadata <- readRDS(here("data", "stroke_ldl", "metadata.rds"))
 
-ldref <- tibble(
+ld_ref <- tibble(
     pop = unique(metadata$pop),
     bfile = here("data", "stroke_ldl", "ref", paste0(pop, "_vid"))
 )
 
-out <- organise_data(metadata, "plink", ld_ref, mc.cores=10)
+# Read LDL in once
+metadata_ldl <- subset(metadata, trait == "LDL")
+rawdat <- mclapply(1:nrow(metadata_ldl), \(i) read_file(metadata_ldl[i,]))
+
+out <- subset(metadata, what == "outcome")$trait %>%
+    unique() %>% {
+    lapply(., \(x) {
+        message(x)
+
+        temp <- subset(metadata, trait == x)
+        rawdat_this <- mclapply(1:nrow(temp), \(i) read_file(temp[i,]))
+        rawdat_this <- c(rawdat, rawdat_this)
+
+        a <- organise_data(subset(metadata, trait %in% c("LDL", x)), "plink", ld_ref, mc.cores=10, rawdat=rawdat_this)
+        return(a)
+    })}
+
 saveRDS(out, file=here("data", "stroke_ldl", "organised_summary_data.rds"))

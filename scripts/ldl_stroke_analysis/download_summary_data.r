@@ -13,8 +13,8 @@ t <- lapply(d, \(x) {
         what = "outcome",
         id_gc = x$gwas_id,
         trait = x$trait_description,
-        pop = x$samples[[1]]$sample_ancestry_category,
-        id = paste(trait, pop),
+        pop1 = x$samples[[1]]$sample_ancestry_category,
+        id = paste(trait, pop1),
         n = x$samples[[1]]$sample_size,
         nsample = length(x$samples),
         chr_col = 1,
@@ -32,10 +32,12 @@ mutate(
     fn_yaml = bn, 
     url=gsub("-meta.yaml", "", fn_yaml), 
     fn=here("data", "stroke_ldl", "raw", basename(url))) %>%
-filter(nsample == 1, trait == "Stroke")
-
+filter(nsample == 1)
+table(t$pop1)
 # Manual step
-t$pop <- c("EUR", "EAS", "AFR", "AMR", "SAS")
+
+popmap <- tibble(pop1 = unique(t$pop1), pop = c("EUR", "EAS", "AFR", "AMR", "SAS"))
+t <- inner_join(t, popmap)
 
 dir.create(here("data", "stroke_ldl", "raw"), recursive=T)
 
