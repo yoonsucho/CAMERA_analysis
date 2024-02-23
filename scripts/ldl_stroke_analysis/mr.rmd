@@ -6,7 +6,7 @@ date: 2024-01-20
 
 ```{r}
 library(knitr)
-knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(cache=FALSE, cache.lazy = FALSE)
 ```
 
 ```{r}
@@ -20,9 +20,8 @@ library(CAMeRa)
 
 Load in organised data
 
-```{r}
+```{r, cache=TRUE, cache.lazy=FALSE}
 out <- readRDS(here("data", "stroke_ldl", "organised_summary_data.rds"))
-names(out)
 metadata <- readRDS(here("data", "stroke_ldl", "metadata.rds"))
 ```
 
@@ -101,9 +100,9 @@ l <- lapply(xs, \(x) {
     x$cross_estimate()
 })
 
-lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% {
+lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% mutate(Qjfdr=p.adjust(Qjpval, "fdr")) %>% {
     ggplot(., aes(x=Estimate, y=pops)) +
-    geom_point(data=. %>% filter(pops != "All"), aes(colour=pops, size=-log10(Qjpval))) +
+    geom_point(data=. %>% filter(pops != "All"), aes(colour=pops, size=Qjpval < 0.05)) +
     geom_errorbarh(data=. %>% filter(pops != "All"), aes(colour=pops, xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
     geom_point(data=. %>% filter(pops == "All")) +
     geom_errorbarh(data=. %>% filter(pops == "All"), aes(xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
@@ -114,6 +113,10 @@ lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() 
     theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
     labs(y="", x="MR estimate of LDL cholesterol on stroke", colour="Ancestry", size="Heterogeneity\n-log10(p-value)")
 }
+```
+
+```{r}
+lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% kable
 ```
 
 ```{r}
@@ -129,19 +132,17 @@ xs[[3]]$mrgxe_plot()
 lapply(p, \(x) {
     fixed_effects_meta_analysis(x$a, x$a_se) %>%
     {tibble(a=.$beta, se=.$se, pval=.$pval, nsnp=.$Qdf+1, Qpval=.$Qpval)}
-}) %>% bind_rows() %>% mutate(outcome=stroke_traits)
+}) %>% bind_rows() %>% mutate(outcome=stroke_traits) %>% kable
 ```
 
 ```{r}
-l2 <- lapply(xs, \(x) {
+l <- lapply(xs, \(x) {
     x$pleiotropy()
 })
 xs[[1]]$pleiotropy_outliers
 xs[[1]]$pleiotropy_Q_outliers
 xs[[1]]$pleiotropy_agreement %>% as.data.frame
 ```
-
-
 
 ```{r}
 temp <- lapply(1:length(xs), \(i) xs[[i]]$pleiotropy_agreement %>% mutate(outcome=stroke_traits[i])) %>% bind_rows() %>%
@@ -156,7 +157,6 @@ inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), b
     labs(x="Expected outlier replication", y="Observed outlier replication", colour="Ancestry", shape="Outcome") +
     scale_colour_brewer(type="qual", palette=3)
 
-    tidyr::pivot_wider(names_from=c(datum, disc, rep, outcome), values_from=value)
 ```
 
 
