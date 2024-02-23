@@ -42,3 +42,8 @@ for(i in 25:nrow(fn)) {
     # x$pleiotropy()
     save(x, file=here("data", "bbj", basename(fn$fp[i])))
 }
+
+fn$newpath <- file.path(here("data", "bbj"), basename(fn$fp))
+saveRDS(fn, here("data", "bbj", "fn.rds"))
+
+
