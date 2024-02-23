@@ -52,3 +52,17 @@ rule quick_mr:
         "quick_mr.html"
     script:
         "quick_mr.rmd"
+
+rule create_dummy_data:
+    input: "../../data/stroke_ldl/organised_summary_data.rds"
+    output:
+        "dummy_data.rds"
+    script:
+        "create_dummy_data.r"
+
+rule mr:
+    input: "../../data/stroke_ldl/organised_summary_data.rds"
+    output:
+        "mr.html"
+    script:
+        "mr.rmd"

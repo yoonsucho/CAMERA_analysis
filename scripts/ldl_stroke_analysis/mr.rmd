@@ -1,0 +1,162 @@
+---
+title: "Quick MR analysis of LDL on stroke"
+author: "Gibran Hemani"
+date: 2024-01-20
+---
+
+```{r}
+library(knitr)
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+```{r}
+library(dplyr)
+library(here)
+library(tidyr)
+library(ggplot2)
+library(CAMeRa)
+```
+
+
+Load in organised data
+
+```{r}
+out <- readRDS(here("data", "stroke_ldl", "organised_summary_data.rds"))
+names(out)
+metadata <- readRDS(here("data", "stroke_ldl", "metadata.rds"))
+```
+
+
+
+```{r}
+stroke_traits <- unique(metadata$trait)[-1]
+# dat <- lapply(1:length(out), \(i) {
+#     dat1 <- subset(out[[i]]$tophit_pool, target_trait == "LDL" & trait == "LDL")
+#     dat2 <- subset(out[[i]]$tophit_pool, target_trait == "LDL" & trait == stroke_traits[i])
+#     dat <- inner_join(dat1, dat2, by=c("vid", "pop"))
+#     dat
+# })
+
+xs <- lapply(1:length(out), \(i) {
+    o <- out[[i]]
+    inst <- unique(subset(o$tophit_pool, target_trait == "LDL")$vid)
+    inst_o <- unique(subset(o$tophit_pool, target_trait == stroke_traits[i])$vid)
+
+    names(o$region_extract[[1]]) <- inst
+    names(o$region_extract[[2]]) <- inst_o
+
+    instrument_raw <- o$tophit_pool %>% filter(target_trait == "LDL" & trait == "LDL") %>% rename(position="pos", nea="oa", p="pval", rsid="vid")
+    instrument_raw
+    instrument_regions <- lapply(unique(instrument_raw$rsid), \(x) {
+        a <- o$region_extract[[1]][[x]] %>% 
+            filter(trait == "LDL") %>% 
+            rename(position="pos", nea="oa", p="pval", rsid="vid") %>%
+            group_by(pop) %>% 
+            group_split() %>% as.list()
+        names(a) <- sapply(a, \(z) z$id[1])
+        a
+    })
+    
+    instrument_outcome <- subset(o$tophit_pool, trait == stroke_traits[i] & target_trait == "LDL" & vid %in% instrument_raw$rsid) %>% rename(position="pos", nea="oa", p="pval", rsid="vid")
+
+    # restrict regions to common snps
+    instrument_outcome_regions <- lapply(unique(instrument_raw$rsid), \(x) {
+        a <- o$region_extract[[1]][[x]] %>% 
+            filter(trait == stroke_traits[i]) %>% 
+            rename(position="pos", nea="oa", p="pval", rsid="vid") %>%
+            group_by(pop) %>% 
+            group_split() %>% as.list()
+        names(a) <- sapply(a, \(z) z$id[1])
+        a
+    })
+
+    names(instrument_regions) <- unique(instrument_raw$rsid)
+    names(instrument_outcome_regions) <- unique(instrument_raw$rsid)
+
+    x <- CAMERA$new()
+    x$import_from_local(
+        instrument_raw=instrument_raw, 
+        instrument_outcome=instrument_outcome, 
+        instrument_regions=instrument_regions, 
+        instrument_outcome_regions=instrument_outcome_regions, 
+        exposure_ids=unique(instrument_raw$id), 
+        outcome_ids=unique(names(instrument_outcome_regions[[1]])),
+        pops = c("AFR", "EAS", "EUR", "AMR", "SAS")
+    )
+    return(x)
+})
+```
+
+
+
+```{r}
+l <- lapply(xs, \(x) {
+    x$fema_regional_instruments()
+    return(x)
+})
+
+l <- lapply(xs, \(x) {
+    x$make_outcome_local(exp=x$instrument_raw)
+    x$harmonise()
+    x$cross_estimate()
+})
+
+lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% {
+    ggplot(., aes(x=Estimate, y=pops)) +
+    geom_point(data=. %>% filter(pops != "All"), aes(colour=pops, size=-log10(Qjpval))) +
+    geom_errorbarh(data=. %>% filter(pops != "All"), aes(colour=pops, xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
+    geom_point(data=. %>% filter(pops == "All")) +
+    geom_errorbarh(data=. %>% filter(pops == "All"), aes(xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
+    facet_grid(outcome ~ .) +
+    scale_colour_brewer(type="qual", palette=3) +
+    geom_vline(xintercept=0, linetype="dotted") +
+    scale_y_discrete(limits=c(unique(.$pops)[unique(.$pops) != "All"], "All")) +
+    theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+    labs(y="", x="MR estimate of LDL cholesterol on stroke", colour="Ancestry", size="Heterogeneity\n-log10(p-value)")
+}
+```
+
+```{r}
+p <- lapply(xs, \(x) {
+    x$estimate_instrument_heterogeneity_per_variant()
+    x$mrgxe()
+})
+p
+xs[[3]]$mrgxe_plot()
+```
+
+```{r}
+lapply(p, \(x) {
+    fixed_effects_meta_analysis(x$a, x$a_se) %>%
+    {tibble(a=.$beta, se=.$se, pval=.$pval, nsnp=.$Qdf+1, Qpval=.$Qpval)}
+}) %>% bind_rows() %>% mutate(outcome=stroke_traits)
+```
+
+```{r}
+l2 <- lapply(xs, \(x) {
+    x$pleiotropy()
+})
+xs[[1]]$pleiotropy_outliers
+xs[[1]]$pleiotropy_Q_outliers
+xs[[1]]$pleiotropy_agreement %>% as.data.frame
+```
+
+
+
+```{r}
+temp <- lapply(1:length(xs), \(i) xs[[i]]$pleiotropy_agreement %>% mutate(outcome=stroke_traits[i])) %>% bind_rows() %>%
+    filter(metric=="Sign")
+inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), by=c("disc", "rep", "outcome")) %>%
+    # filter(disc=="AFR") %>%
+    ggplot(., aes(x=value.x, y=value.y)) +
+    geom_point(aes(colour=paste(rep), shape=outcome)) +
+    geom_smooth(method="lm", aes(colour=paste(disc)), se=FALSE) +
+    facet_wrap(~ paste(disc)) +
+    geom_abline(slope=1, intercept=0, linetype="dotted") +
+    labs(x="Expected outlier replication", y="Observed outlier replication", colour="Ancestry", shape="Outcome") +
+    scale_colour_brewer(type="qual", palette=3)
+
+    tidyr::pivot_wider(names_from=c(datum, disc, rep, outcome), values_from=value)
+```
+
+

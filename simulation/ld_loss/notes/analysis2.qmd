@@ -56,11 +56,24 @@ The sample size doesn't have much impact on the decay of LD. But the discovery p
 res %>% 
   mutate(pvalbin = cut(-log10(pval), 5)) %>%
   ggplot(., aes(y=r2, x=as.factor(pop))) +
-  geom_boxplot(aes(fill=as.factor(prop_afr))) +
+  geom_boxplot(aes(fill=as.factor(prop_afr)), outlier.shape=NA) +
   facet_grid(. ~ pvalbin) +
-  scale_fill_brewer(type="seq")
+  scale_fill_brewer(type="seq") +
+  labs(y="LD between tag and causal variants", x="Population", fill="Prop AFR/EUR in\nmeta analysis") +
+  theme(axis.text.x=element_text(angle=90))
 ```
 
+```{r}
+res %>% 
+  filter(-log10(pval) < 100) %>%
+  mutate(pvalbin = cut(-log10(pval), 3)) %>%
+  ggplot(., aes(y=r2, x=as.factor(pop))) +
+  geom_boxplot(aes(fill=as.factor(prop_afr)), outlier.shape=NA) +
+  facet_grid(. ~ pvalbin) +
+  scale_fill_brewer(type="seq") +
+  labs(y="LD between tag and causal variants", x="Population", fill="Prop AFR/EUR in\nmeta analysis") +
+  theme(axis.text.x=element_text(angle=90))
+```
 
 ```{r}
 ress <- res %>% 
@@ -73,6 +86,8 @@ ress %>%
   geom_point(aes(colour=as.factor(prop_afr)), position=position_dodge(width=0.7)) +
   geom_errorbar(aes(ymin=lci, ymax=uci, colour=as.factor(prop_afr)), position=position_dodge(width=0.7), width=0) +
   facet_grid(. ~ pvalbin) +
-  scale_colour_brewer(type="seq")
+  scale_colour_brewer(type="seq") +
+  labs(y="LD between tag and causal variants", x="Population", fill="Prop AFR/EUR in\nmeta analysis") +
+  theme(axis.text.x=element_text(angle=90))
 ```
 
