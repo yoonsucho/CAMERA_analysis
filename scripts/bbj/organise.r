@@ -20,7 +20,7 @@ for(i in 1:nrow(fn)) {
     fn$eur_id_x[i] <- a$exposure_ids[1]
     fn$eas_id_x[i] <- a$exposure_ids[2]
     fn$eur_id_y[i] <- a$outcome_ids[1]
-    fn$eas_id_y[i] <- a$outcome_ids[2]
+        fn$eas_id_y[i] <- a$outcome_ids[2]
     x <- CAMERA$new()
     x$import(a)
     for(j in 1:length(x$instrument_regions)) {
@@ -46,16 +46,87 @@ for(i in 1:nrow(fn)) {
 fn$newpath <- file.path(here("data", "bbj"), basename(fn$fp))
 saveRDS(fn, here("data", "bbj", "fn.rds"))
 
+
+# ieu-b-25 ieu-b-5… ieu-b-38 bbj-a-52
+x <- CAMERA$new(
+  exposure_ids=c(
+    "ieu-b-25", 
+    "ieu-b-5071"
+  ), 
+  outcome_ids=c(
+    "ukb-b-20175", 
+    "bbj-a-52"
+  ), 
+  pops = c("EUR", "EAS"),
+  radius=50000, 
+  clump_pop="EUR"
+)
+x$extract_instruments()
+x$make_outcome_data()
+x$harmonise()
+x$cross_estimate()
+x$extract_instrument_regions()
+x$fema_regional_instruments()
+x$make_outcome_data()
+x$harmonise(exp=x$instrument_fema)
+x$cross_estimate()
+
+fn2 <- tibble(
+    eur_id_x = "ieu-b-25",
+    eas_id_x = "ieu-b-5071",
+    eur_id_y = "ukb-b-20175",
+    eas_id_y = "bbj-a-52",
+    newpath = here("data", "bbj", "examples_cig_sbp_new.rdata")
+)
+save(x, file=here("data", "bbj", basename(fn2$newpath)))
+fn <- bind_rows(fn, fn2)
+
+
+x <- CAMERA$new(
+  exposure_ids=c(
+    "ieu-b-25", 
+    "ieu-b-5071"
+  ), 
+  outcome_ids=c(
+    "ukb-b-20175", 
+    "ieu-b-5075"
+  ), 
+  pops = c("EUR", "EAS"),
+  radius=50000, 
+  clump_pop="EUR"
+)
+x$extract_instruments()
+x$make_outcome_data()
+x$harmonise()
+x$cross_estimate()
+x$extract_instrument_regions()
+x$fema_regional_instruments()
+x$make_outcome_data()
+x$harmonise(exp=x$instrument_fema)
+x$cross_estimate()
+
+fn2 <- tibble(
+    eur_id_x = "ieu-b-25",
+    eas_id_x = "ieu-b-5071",
+    eur_id_y = "ukb-b-20175",
+    eas_id_y = "ieu-b-5075",
+    newpath = here("data", "bbj", "examples_cig_sbp_new2.rdata")
+)
+save(x, file=here("data", "bbj", basename(fn2$newpath)))
+fn <- bind_rows(fn, fn2)
+
+
+
 i <- 1
 res <- list()
-for(i in 1:nrow(fn)) {
+for(i in 60:nrow(fn)) {
     r <- list()
     message(i)
     load(fn$newpath[i])
     x$harmonise(exp=x$instrument_raw)
-    o1 <- x$cross_estimate() %>% mutate(f=basename(fn$fp[i]), instrument="Raw")
+    o1 <- x$cross_estimate() %>% mutate(f=basename(fn$newpath[i]), instrument="Raw")
     x$harmonise(exp=x$instrument_fema)
-    o2 <- x$cross_estimate() %>% mutate(f=basename(fn$fp[i]), instrument="FEMA")
+    o2 <- x$cross_estimate() %>% mutate(f=basename(fn$newpath[i]), instrument="FEMA")
     r$mrres <- bind_rows(o1, o2)
 
     o1 <- x$estimate_instrument_specificity(instrument=x$instrument_raw) %>% mutate(instrument="Raw")
@@ -77,4 +148,23 @@ for(i in 1:nrow(fn)) {
     res[[i]] <- r
 }
 
+
+gi <- gwasinfo(unique(c(fn$eur_id_x, fn$eur_id_y)))
+gi$trait
+
+.simpleCap <- function(x) {
+    s <- strsplit(x, " ")[[1]]
+    paste(toupper(substring(s, 1, 1)), substring(s, 2),
+        sep = "", collapse = " ")
+}
+gi$trait <- sapply(gi$trait, .simpleCap)
+gi$trait[grepl("Breast Cancer", gi$trait)] <- "Breast Cancer"
+gi$trait[grepl("Systolic", gi$trait)] <- "Systolic Blood Pressure"
+gi$trait
+
+fn <- left_join(fn, dplyr::select(gi, id, exposure=trait), by=c("eur_id_x"="id")) %>%
+    left_join(., dplyr::select(gi, id, outcome=trait), by=c("eur_id_y"="id"))
+
 saveRDS(res, file=here("data", "bbj", "res.rds"))
+saveRDS(fn, here("data", "bbj", "fn.rds"))
+

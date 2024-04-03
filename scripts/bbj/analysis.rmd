@@ -1,0 +1,319 @@
+---
+title: Analysis of EUR vs EAS traits
+author: Gibran Hemani
+---
+
+```{r}
+library(knitr)
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+```{r}
+library(CAMeRa)
+library(ggplot2)
+library(dplyr)
+library(here)
+library(ieugwasr)
+```
+
+
+```{r}
+fn <- readRDS(here("data", "bbj", "fn.rds"))
+res <- readRDS(here("data", "bbj", "res.rds"))
+length(res)
+names(res)
+head(fn)
+sets <- 1:length(res)
+```
+
+## MR results
+
+```{r}
+mrres <- lapply(sets, \(i) {
+    res[[i]]$mrres %>% 
+    mutate(
+        exposure=fn$exposure[i], 
+        outcome=fn$outcome[i],
+        eur_id_x = fn$eur_id_x[i],
+        eas_id_x = fn$eas_id_x[i],
+        eur_id_y = fn$eur_id_y[i],
+        eas_id_y = fn$eas_id_y[i],
+    )
+}) %>% bind_rows()
+```
+
+Any heterogeneity?
+
+```{r}
+mrres %>% 
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>%
+    filter(Qjpval < 0.05)
+```
+
+Not really after multiple testing correction.
+
+```{r}
+mrres %>% 
+    filter(instrument=="Raw" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>%
+    filter(pops == "All") %>% mutate(Qfdr = p.adjust(Qjpval)) %>% filter(Qfdr < 0.05) %>% str
+```
+
+
+```{r}
+mrres %>%
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% 
+    mutate(lci = Estimate - 1.96 * `Std. Error`, uci = Estimate + 1.96 * `Std. Error`) %>%
+    mutate(lci = pmax(-0.6, lci), uci = pmin(1.1, uci)) %>%
+    {
+    ggplot(., aes(x=Estimate, y=pops)) +
+    geom_rect(data=subset(., pops == "All"), aes(alpha = Qjpval < 0.05), xmin = -Inf,xmax = Inf, ymin = -Inf, ymax = Inf, fill="yellow") +
+    geom_vline(xintercept=0, linetype="dotted") +
+    geom_point(aes(colour=pops=="All")) +
+    geom_errorbarh(aes(colour=pops=="All", xmin=lci, xmax=uci), height=0) + 
+    facet_grid(outcome ~ exposure) +
+    theme(strip.text.y=element_text(angle=0), legend.position="none") +
+    scale_alpha_manual(values=c(0, 0.2)) +
+    xlim(-0.6, 1.1) +
+    labs(y="")
+}
+ggsave(here("results", "bbj_mrres.pdf"), width=10, height=8)
+```
+
+
+```{r}
+mrres %>%
+    filter(instrument=="Raw" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% 
+    mutate(lci = Estimate - 1.96 * `Std. Error`, uci = Estimate + 1.96 * `Std. Error`) %>%
+    mutate(lci = pmax(-0.6, lci), uci = pmin(1.1, uci)) %>%
+    {
+    ggplot(., aes(x=Estimate, y=pops)) +
+    geom_rect(data=subset(., pops == "All"), aes(alpha = Qjpval < 0.05), xmin = -Inf,xmax = Inf, ymin = -Inf, ymax = Inf, fill="yellow") +
+    geom_vline(xintercept=0, linetype="dotted") +
+    geom_point(aes(colour=pops=="All")) +
+    geom_errorbarh(aes(colour=pops=="All", xmin=lci, xmax=uci), height=0) + 
+    facet_grid(outcome ~ exposure) +
+    theme(strip.text.y=element_text(angle=0), legend.position="none") +
+    scale_alpha_manual(values=c(0, 0.2)) +
+    xlim(-0.6, 1.1) +
+    labs(y="")
+}
+ggsave(here("results", "bbj_mrres_raw.pdf"), width=10, height=8)
+```
+
+
+## Simulation to check interpretation
+
+T2D in East Asians onset occurs at a lower BMI threshold. What should this do to the effect of BMI on T2D?
+
+```{r}
+n <- 100000
+bmi <- rnorm(n, 22, 5)
+l1 <- rep(0.02, n)
+l1[bmi > 26] <- bmi[bmi > 26] * 0.01
+l2 <- rep(0.02, n)
+l2[bmi > 23] <- bmi[bmi > 23] * 0.005
+t2d1 <- rbinom(n, 1, plogis(l1))
+t2d2 <- rbinom(n, 1, plogis(l2))
+table(t2d1)
+table(t2d2)
+
+summary(glm(t2d1 ~ bmi, family="binomial"))
+summary(glm(t2d2 ~ bmi, family="binomial"))
+```
+
+- Higher starting point leads to higher effect size
+- That means that the slope must be smaller. Effect size is much more sensitive to slope than to starting point 
+
+Power increase
+
+```{r}
+mrres %>%
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% group_by(exposure, outcome) %>% arrange(`Std. Error`) %>% slice(1) %>% ungroup() %>% {table(.$pops)}
+```
+
+```{r}
+mrres %>%
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% group_by(exposure, outcome) %>% arrange(`Std. Error`) %>% filter(pops != "EAS") %>% slice(1) %>% ungroup() %>% {table(.$pops)}
+```
+
+```{r}
+mrres %>%
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% 
+    group_by(exposure, outcome) %>% filter(pops != "EUR") %>% filter(`Pr(>|t|)` < 0.05 & Qjpval > 0.05) %>% select(pops, exposure, outcome)  %>% as.data.frame
+```
+
+## Instrument agreement
+
+```{r}
+fn$index <- 1:nrow(fn)
+fn2 <- fn %>% filter(eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52")
+fn2 <- fn2 %>% filter(!duplicated(exposure))
+fn2
+sets <- fn2$index
+temp <- lapply(sets, \(i) {
+    res[[i]]$instrument_specificity %>% mutate(
+        exposure = fn$exposure[i]
+    )
+}) %>% bind_rows() %>% filter(metric == "Sign")
+
+inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), by=c("discovery", "replication", "exposure", "instrument")) %>%
+    ggplot(., aes(x=value.x, y=value.y)) +
+    geom_point(aes(colour=paste(exposure), shape=instrument)) +
+    geom_smooth(method="lm", aes(colour=exposure, group=discovery), se=FALSE) +
+    # facet_wrap(~ paste(discovery), scale="free") +
+    geom_abline(slope=1, intercept=0, linetype="dotted") +
+    labs(x="Expected instrument sign agreement", y="Observed instrument sign agreement", colour="Ancestry", shape="Outcome") +
+    scale_colour_brewer(type="qual", palette=3)
+```
+
+## Instrument heterogeneity
+
+```{r}
+fn$index <- 1:nrow(fn)
+fn2 <- fn %>% filter(eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52")
+fn2 <- fn2 %>% filter(!duplicated(exposure))
+fn2
+sets <- fn2$index
+temp <- lapply(sets, \(i) {
+    res[[i]]$instrument_heterogeneity %>% mutate(
+        exposure = fn$exposure[i]
+    )
+}) %>% bind_rows() %>% filter(exposure != "Smoking Initiation")
+temp
+temp$disc <- "EUR"
+temp$disc[temp$Reference %in% fn$eas_id_x] <- "EAS"
+temp$rep <- "EUR"
+temp$rep[temp$Replication %in% fn$eas_id_x] <- "EAS"
+
+temp %>% ggplot(., aes(x=exposure, y=agreement)) +
+geom_point(aes(colour=instrument), position=position_dodge(width=0.1)) +
+geom_errorbar(aes(colour=instrument, ymin=agreement-se*1.96, ymax=agreement+se*1.96), width=0, position=position_dodge(width=0.1)) +
+facet_grid(disc ~ .)
+```
+
+```{r}
+temp %>% as.data.frame
+```
+
+
+```{r}
+xy <- lapply(sets, \(i) {
+    load(fn$newpath[i])
+    x$harmonise(exp=x$instrument_raw)
+    a1 <- x$harmonised_dat %>% mutate(instrument="Raw")
+    x$harmonise(exp=x$instrument_fema)
+    a2 <- x$harmonised_dat %>% mutate(instrument="FEMA")
+    a <- bind_rows(
+        inner_join(
+            a1 %>% filter(pops == "EUR") %>% select(SNP, EUR=beta.x, EURse=se.x, instrument),
+            a1 %>% filter(pops == "EAS") %>% select(SNP, EAS=beta.x, EASse=se.x, instrument),
+        ),
+        inner_join(
+            a2 %>% filter(pops == "EUR") %>% select(SNP, EUR=beta.x, EURse=se.x, instrument),
+            a2 %>% filter(pops == "EAS") %>% select(SNP, EAS=beta.x, EASse=se.x, instrument),
+        )
+    ) %>% mutate(exposure = fn$exposure[i])
+    a
+}) %>% bind_rows()
+
+ggplot(xy %>% filter(!grepl("Smoking Initiation", exposure)), aes(x=EUR, y=EAS)) +
+geom_point(aes(colour=instrument), alpha=0.2) +
+geom_errorbarh(aes(xmin=EUR - EURse * 1.96, xmax=EUR + EURse * 1.96, colour=instrument), height=0, alpha=0.2) +
+geom_errorbar(aes(ymin=EAS - EASse * 1.96, ymax=EAS + EASse * 1.96, colour=instrument), width=0, alpha=0.2) +
+geom_abline(slope=1, intercept=0) +
+geom_smooth(method="lm", aes(colour=instrument)) +
+facet_wrap(~ exposure)
+```
+
+
+## Pleiotropy outliers
+
+```{r}
+fn2 <- fn %>% filter(eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52")
+fn2
+sets <- fn2$index
+
+temp <- lapply(sets, \(i) {
+    if(is.null(res[[i]]$pleiotropy)) return(NULL)
+    res[[i]]$pleiotropy %>% mutate(
+        exposure = fn$exposure[i],
+        outcome = fn$outcome[i]
+    )
+}) %>% bind_rows() %>% filter(metric == "Sign")
+temp
+
+inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), by=c("disc", "rep", "exposure", "outcome")) %>%
+    {summary(lm(value.y ~ value.x, data=.))}
+
+inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), by=c("disc", "rep", "exposure", "outcome")) %>%
+    ggplot(., aes(x=value.x, y=value.y)) +
+    geom_point(aes(colour=disc)) +
+    geom_smooth(method="lm", aes(colour=disc, group=disc), se=FALSE) +
+    # facet_wrap(~ paste(discovery), scale="free") +
+    geom_abline(slope=1, intercept=0, linetype="dotted") +
+    labs(x="Expected outlier direction agreement", y="Observed outlier direction agreement", colour="Discovery ancestry", shape="Outcome") +
+    scale_colour_brewer(type="qual", palette=3)
+```
+
+
+## MR GxE
+
+```{r}
+fn2 <- fn %>% filter(eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52")
+fn2
+sets <- fn2$index
+temp <- lapply(sets, \(i) {
+    if(is.null(res[[i]]$mrgxe)) return(NULL)
+    res[[i]]$mrgxe %>% mutate(
+        exposure = fn$exposure[i],
+        outcome = fn$outcome[i],
+        index = i
+    )
+}) %>% bind_rows()
+temp
+```
+
+
+```{r}
+filter(temp, p.adjust(pval, "fdr") < 0.05)
+filter(temp, p.adjust(Qpval, "fdr") < 0.05)
+```
+
+
+```{r}
+o <- filter(temp, p.adjust(Qpval, "fdr") < 0.05)
+
+tt <- lapply(o$index, \(i) {
+    load(fn$newpath[i])
+    x$harmonise(exp=x$instrument_fema)
+    x$estimate_instrument_heterogeneity_per_variant()
+    x$mrgxe()
+    osnp <- x$instrument_heterogeneity_per_variant %>% filter(Qfdr < 0.05) %>% {.$SNP}
+    qsnp <- x$mrgxe_res %>% mutate(fdr=p.adjust(a_pval, "fdr")) %>% filter(fdr < 0.05) %>% {.$SNP}
+    subset(x$harmonised_dat, SNP %in% osnp) %>% mutate(sig = SNP %in% qsnp, exposure = fn$exposure[i], outcome=fn$outcome[i])
+}) %>% bind_rows()
+
+ggplot(tt, aes(x=beta.x, y=beta.y)) +
+    geom_errorbarh(aes(xmin=beta.x - se.x * 1.96, xmax=beta.x + se.x * 1.96), height=0, alpha=0.2) +
+    geom_errorbar(aes(ymin=beta.y - se.y * 1.96, ymax=beta.y + se.y * 1.96), width=0, alpha=0.2) +
+    geom_abline(slope=1, intercept=0) +
+    geom_point(aes(colour=pops)) +
+    geom_smooth(se=FALSE, method="lm", aes(group=SNP, colour=sig)) +
+    geom_smooth(se=FALSE, method="lm", aes(colour=pops)) +
+    labs(colour="MR GxE FDR < 0.05") +
+    facet_wrap(~ paste(outcome, "~", exposure)) +
+    scale_colour_brewer(type="qual")
+```
+
+```{r}
+subset(tt, exposure == "Body Mass Index" & sig)$SNP %>% unique
+```
+
+10:114758349 - TCF7L2
+12:14413931 - ATF7IP
+15:51748610 - DMXL2
+18:58039276 - MC4R
+3:85819412 - CADM2
+3:185499057 - IG2BP2
+6:20694884 - CDKAL1
+

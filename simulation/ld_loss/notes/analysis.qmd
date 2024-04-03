@@ -162,7 +162,7 @@ left_join(subset(res, pop != "EUR", select=c(rsidcode, maf, pop)), subset(res, p
   mutate(gvar.x=2*maf.x*(1-maf.x), gvar.y=2*maf.y*(1-maf.y)) %>%
   group_by(pop) %>%
   do({
-    summary(lm(gvar.x ~ gvar.y, .))$coef %>% as_tibble() %>% slice(n=2)
+    summary(lm(gvar.x ~ gvar.y, .))$coef %>% as_tibble() %>% slice_tail(n=2)
   })
 ```
 
@@ -673,18 +673,49 @@ temp <- left_join(subset(res2, pop != "EUR"), subset(res2, pop=="EUR", select=c(
 temp %>%
   filter(Fstat.x > 1) %>%
   ggplot(., aes(x=1/Fstat.y, y=1/Fstat.x)) +
-  geom_point() + 
+  geom_point(alpha=0.1) + 
   geom_abline(b=1, colour="white") +
   geom_smooth() +
-  facet_wrap(~ pop) +
+  facet_wrap(~ pop, scale="free_y") +
+  # scale_y_log10() +
   labs(x="Weak instrument bias (EUR)", y="Weak instrument bias (Other pops)")
 ```
+
+```{r}
+temp %>%
+  filter(Fstat.x > 1) %>%
+  ggplot(., aes(x=1/Fstat.y, y=1/Fstat.x)) +
+#  geom_point(alpha=0.1) + 
+  geom_abline(b=1, colour="white") +
+  geom_smooth(aes(colour=pop)) +
+  # scale_y_log10() +
+  labs(x="Weak instrument bias (EUR)", y="Weak instrument bias (Other pops)")
+
+```
+
+
+```{r}
+tt <- temp %>% 
+  ungroup() %>%
+  mutate(fbin = cut(Fstat.y, breaks=30))
+tt
+ggplot(tt, aes(x=Fstat.y, y=Fstat.x)) +
+#  geom_boxplot(outliers = FALSE, aes(group=fbin)) +
+  geom_smooth(method="lm", aes(x=Fstat.y)) +
+  facet_wrap(~ pop, scales="free") +
+  geom_abline(slope=1, intercept=0)
+```
+
 
 Get a slope for these relationships
 
 ```{r}
+summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), temp))
+
 group_by(temp, pop) %>%
-  do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice(n=2)})
+  do({
+    summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice_tail(n=1)
+  })
 ```
 
 So weak instrument bias is about 3x higher in AFR than Europeans assuming same sample size.
@@ -720,8 +751,24 @@ temp2 %>%
 
 ```{r}
 group_by(temp2, pop) %>%
-  do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice(n=2)})
+  do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice_tail(n=1)})
 ```
+
+```{r}
+bind_rows(
+  temp %>% mutate(what="AF + LD"),
+  temp2 %>% mutate(what="AF")
+) %>%
+  filter(Fstat.x > 1) %>%
+  ggplot(., aes(x=1/Fstat.y, y=1/Fstat.x)) +
+#  geom_point(alpha=0.1) + 
+  geom_abline(b=1, colour="black") +
+  geom_smooth(method="lm", aes(colour=pop)) +
+  facet_grid(. ~ what) +
+  labs(x="Weak instrument bias (EUR)", y="Weak instrument bias (Other pops)") +
+  scale_colour_brewer(type="qual")
+```
+
 
 The difference in 1/F would be ~2 for Africans without the LD problem (i.e. if you introduce fine mapping effectively).
 

@@ -86,23 +86,126 @@ xs <- lapply(1:length(out), \(i) {
 })
 ```
 
-
+## Instruments
 
 ```{r}
 l <- lapply(xs, \(x) {
-    x$fema_regional_instruments(method="zma", n=c(100000, 147000, 132000, 48000, 41000))
+    x$fema_regional_instruments(method="fema")
     return(x)
 })
+```
 
+Get heterogeneity for raw
+
+```{r}
+xs[[1]]$instrument_heterogeneity(xs[[1]]$instrument_raw)
+```
+
+```{r}
+xs[[1]]$instrument_heterogeneity(xs[[1]]$instrument_fema)
+```
+
+```{r}
+temp <- bind_rows(
+    xs[[1]]$estimate_instrument_specificity(xs[[1]]$instrument_raw) %>% mutate(method="Raw"),
+    xs[[1]]$estimate_instrument_specificity(xs[[1]]$instrument_fema) %>% mutate(method="FEMA")
+)
+
+a <- temp %>% filter(metric == "Sign") %>%
+    mutate(discovery = gsub("LDL ", "", discovery), replication = gsub("LDL ", "", replication)) %>%
+    select(discovery, replication, nsnp, datum, value, method) %>%
+    tidyr::pivot_wider(names_from=c(datum), values_from=value) %>%
+    {
+        ggplot(., aes(x=Expected, y=Observed)) +
+        geom_abline(slope=1, intercept=0, linetype="dotted") +
+        geom_point(aes(colour=method)) +
+        geom_smooth(method="lm", aes(colour=method), se=FALSE) +
+        facet_wrap(. ~ discovery, scale="free") +
+        scale_x_log10() +
+        scale_y_log10()
+    }
+# ggsave(a, file="temp.png")
+a
+```
+
+```{r}
+temp <- bind_rows(
+    xs[[1]]$instrument_heterogeneity(xs[[1]]$instrument_raw) %>% mutate(method="Raw"),
+    xs[[1]]$instrument_heterogeneity(xs[[1]]$instrument_fema) %>% mutate(method="FEMA")
+)
+
+a <- temp %>%
+    mutate(Reference = gsub("LDL ", "", Reference), Replication = gsub("LDL ", "", Replication)) %>%
+    {
+        ggplot(., aes(x=Replication, y=agreement)) +
+        geom_hline(yintercept=1, linetype="dotted") +
+        geom_point(aes(colour=method), position=position_dodge(width=0.5)) +
+        geom_errorbar(aes(colour=method, ymin=agreement - 1.96 * se, ymax=agreement + 1.96 * se), width=0, position=position_dodge(width=0.5)) +
+        facet_wrap(. ~ Reference, labeller=label_both)
+    }
+# ggsave(a, file="temp.png")
+a
+```
+
+Instrument discovery per group
+
+```{r}
+xs[[1]]$instrument_fema %>%
+    group_by(pop) %>%
+    summarise(nsig = sum(p < 5e-8))
+
+xs[[1]]$instrument_raw %>%
+    group_by(pop) %>%
+    summarise(nsig = sum(p < 5e-8))
+```
+
+
+Per variant heterogeneity (Raw)
+
+```{r}
+xs[[1]]$make_outcome_local(exp=xs[[1]]$instrument_raw)
+xs[[1]]$harmonise()
+xs[[1]]$estimate_instrument_heterogeneity_per_variant()
+xs[[1]]$estimate_instrument_heterogeneity_per_variant() %>%
+    filter(Qfdr < 0.05)
+```
+
+Per variant heterogeneity (FEMA)
+
+```{r}
+xs[[1]]$make_outcome_local(exp=xs[[1]]$instrument_fema)
+xs[[1]]$harmonise(exp=xs[[1]]$instrument_fema)
+xs[[1]]$estimate_instrument_heterogeneity_per_variant()
+xs[[1]]$estimate_instrument_heterogeneity_per_variant() %>%
+    filter(Qfdr < 0.05)
+```
+
+Per variant heterogeneity (Raw, European discovery)
+
+```{r}
+eur_raw <- xs[[1]]$instrument_raw %>% filter(pop == "EUR" & p < 5e-8) %>% {.$rsid}
+
+xs[[1]]$make_outcome_local(exp=xs[[1]]$instrument_raw[xs[[1]]$instrument_raw$rsid %in% eur_raw,])
+xs[[1]]$harmonise()
+xs[[1]]$estimate_instrument_heterogeneity_per_variant()
+xs[[1]]$estimate_instrument_heterogeneity_per_variant() %>%
+    filter(Qfdr < 0.05)
+```
+
+## MR analysis
+
+```{r}
 l <- lapply(xs, \(x) {
-    x$make_outcome_local(exp=x$instrument_raw)
-    x$harmonise()
+    x$make_outcome_local(exp=x$instrument_fema)
+    x$harmonise(exp=x$instrument_fema)
     x$cross_estimate()
 })
+```
 
-lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% mutate(Qjfdr=p.adjust(Qjpval, "fdr")) %>% {
+```{r}
+pl <- lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() %>% mutate(Qjfdr=p.adjust(Qjpval, "fdr")) %>% {
     ggplot(., aes(x=Estimate, y=pops)) +
-    geom_point(data=. %>% filter(pops != "All"), aes(colour=pops, size=Qjpval < 0.05)) +
+    geom_point(data=. %>% filter(pops != "All"), aes(colour=pops, shape=Qjpval < 0.05)) +
     geom_errorbarh(data=. %>% filter(pops != "All"), aes(colour=pops, xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
     geom_point(data=. %>% filter(pops == "All")) +
     geom_errorbarh(data=. %>% filter(pops == "All"), aes(xmin=Estimate - 1.96 * `Std. Error`, xmax=Estimate + 1.96 * `Std. Error`), height=0) +
@@ -110,9 +213,15 @@ lapply(1:5, \(i) {l[[i]] %>% mutate(outcome=stroke_traits[i])}) %>% bind_rows() 
     scale_colour_brewer(type="qual", palette=3) +
     geom_vline(xintercept=0, linetype="dotted") +
     scale_y_discrete(limits=c(unique(.$pops)[unique(.$pops) != "All"], "All")) +
-    theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
-    labs(y="", x="MR estimate of LDL cholesterol on stroke", colour="Ancestry", size="Heterogeneity\n-log10(p-value)")
+    guides(colour="none") +
+    # theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+    labs(y="", x="MR estimate of LDL cholesterol on stroke", colour="Ancestry", shape="Nominal heterogeneity")
 }
+pl
+```
+
+```{r}
+ggsave(pl, file=here("results", "ldl_stroke.pdf"), height=8, width=7)
 ```
 
 ```{r}
@@ -162,6 +271,7 @@ inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), b
 ```{r}
 temp <- lapply(1:length(xs), \(i) xs[[i]]$estimate_instrument_specificity(xs[[i]]$instrument_fema) %>% mutate(outcome=stroke_traits[i])) %>% bind_rows() %>%
     filter(metric=="Sign")
+
 inner_join(subset(temp, datum=="Expected"), subset(temp, datum == "Observed"), by=c("discovery", "replication", "outcome")) %>%
     ggplot(., aes(x=value.x, y=value.y)) +
     geom_point(aes(colour=paste(replication), shape=outcome)) +
@@ -190,3 +300,74 @@ geom_boxplot(aes(fill=method))
 ```
 
 
+## Regional plot examples
+
+```{r}
+i <- 26
+xs[[1]]$plot_regional_instruments(names(xs[[1]]$instrument_regions)[i]) + facet_grid(pop ~ region, scale="free_y")
+```
+
+
+```{r}
+subset(xs[[1]]$instrument_raw, (p > 1e-3 & pop == "AFR"))$rsi
+subset(xs[[1]]$instrument_fema, (p > 1e-3 & pop == "AFR"))
+```
+
+
+
+```{r}
+p <- function (region, instrument_regions = xs[[1]]$instrument_regions, meta_analysis_regions = xs[[1]]$instrument_fema_regions) {
+    r <- instrument_regions[[region]]
+    d <- meta_analysis_regions[[region]]
+    r <- lapply(r, function(y) y %>% dplyr::mutate(z = abs(beta)/se))
+    r$fema <- d
+    temp <- lapply(names(r), function(y) r[[y]] %>% dplyr::mutate(pop = y)) %>% 
+        dplyr::bind_rows() %>% dplyr::select(position, z, p, 
+        pop) %>% mutate(region = region)
+    th <- temp %>% dplyr::group_by(pop) %>% dplyr::arrange(desc(z)) %>% 
+        dplyr::slice_head(n = 1) %>% dplyr::ungroup()
+    the <- temp %>% filter(pop == "LDL EUR") %>% dplyr::arrange(desc(z)) %>% 
+        dplyr::slice_head(n = 1)
+    the <- subset(temp, position == the$position)
+    thf <- subset(temp, position == subset(th, pop == "fema")$position)
+    ggplot2::ggplot(temp, ggplot2::aes(x = position, y = -log10(p))) + 
+        ggplot2::geom_point() + 
+        ggplot2::geom_segment(data = th, 
+            aes(x = position, xend = position, y = 0, yend = -log10(p)), 
+            colour = "pink") + 
+        ggplot2::geom_point(data = th, colour = "red") + 
+        ggplot2::geom_segment(data = thf, aes(x = position, xend = position, 
+            y = 0, yend = -log10(p)), colour = "grey") + 
+        ggplot2::geom_point(data = thf, 
+            colour = "blue") + 
+        ggplot2::geom_point(data = the, colour = "yellow") + 
+        ggplot2::facet_grid(pop ~ region, scale="free_y")
+}
+
+i <- 28
+p(names(xs[[1]]$instrument_regions)[i])
+
+regions <- names(xs[[1]]$instrument_regions)
+res <- lapply(regions, \(region) {
+    r = xs[[1]]$instrument_regions[[region]]
+    d = xs[[1]]$instrument_fema_regions[[region]]
+    r <- lapply(r, function(y) y %>% dplyr::mutate(z = abs(beta)/se))
+    r$fema <- d
+    temp <- lapply(names(r), function(y) r[[y]] %>% dplyr::mutate(pop = y)) %>% 
+        dplyr::bind_rows() %>% dplyr::select(position, z, p, 
+        pop) %>% mutate(region = region)
+    th <- temp %>% dplyr::group_by(pop) %>% dplyr::arrange(desc(z)) %>% 
+        dplyr::slice_head(n = 1) %>% dplyr::ungroup() %>% mutate(what="popth")
+    the <- temp %>% filter(pop == "LDL EUR") %>% dplyr::arrange(desc(z)) %>% 
+        dplyr::slice_head(n = 1)
+    the <- subset(temp, position == the$position) %>% mutate(what="eurth")
+    thf <- subset(temp, position == subset(th, pop == "fema")$position) %>% mutate(what="femath")
+    bind_rows(th, the, thf)
+}) %>% bind_rows()
+
+res <- group_by(res, pop, region) %>% mutate(rank=order(p)) %>% as.data.frame()  %>% head(n=100)
+group_by(res, pop, what) %>% summarise(mean(rank, na.rm=T))
+```
+
+
+12, 24

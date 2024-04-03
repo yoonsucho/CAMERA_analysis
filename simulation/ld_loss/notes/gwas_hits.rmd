@@ -1,0 +1,43 @@
+---
+title: "Expected MR performance given difference use of European GWAS hits"
+output: html_notebook
+---
+
+```{r}
+renv::activate("..")
+library(simulateGP)
+library(dplyr)
+library(here)
+library(ggplot2)
+```
+
+What are the implications for MR when European GWAS hits are used for non-European analysis
+
+```{r}
+load(here("../data/gwashits.rdata"))
+gwashits
+```
+
+```{r}
+group_by(gwashits, id) %>% summarise(n=n()) %>% ggplot(., aes(x=n)) + geom_histogram()
+```
+
+```{r}
+group_by(gwashits, id) %>% summarise(n=n()) %>% {summary(.$n)}
+group_by(gwashits, id) %>% summarise(n=n()) %>% group_by(n) %>% summarise(count=n()) %>% as_tibble() %>% {ggplot(., aes(x=n, y=count)) + geom_point(stat="identity") + scale_x_log10()}
+```
+
+For every trait
+
+1. Assume the instruments are the causal variants
+2. Lookup the LD 
+
+```{r}
+
+```
+
+
+
+
+
+

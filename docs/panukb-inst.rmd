@@ -1,0 +1,33 @@
+---
+title: Instruments by ancestry
+---
+
+```{r}
+library(dplyr)
+library(here)
+library(ggplot2)
+library(tidyr)
+```
+
+```{r}
+a <- read.table(here("data", "panukb-inst.txt"), header=FALSE) %>%
+    as_tibble() %>%
+    filter(V2 != "total") %>%
+    mutate(V2 = gsub("_p", "-p", V2)) %>%
+    tidyr::separate(V2, sep="_", into=c("id", "pop"))
+```
+
+```{r}
+ggplot(a, aes(x=pop, y=V1)) +
+geom_line(aes(group=id), alpha=0.1) +
+scale_y_log10()
+```
+
+```{r}
+group_by(a, pop) %>% summarise(mean=mean(V1), median=median(V1), q75=quantile(V1, 0.75))
+```
+
+
+$$
+F = \frac{ 2p(1-p) \beta^2 N R^2 }{var(Y)}
+$$
