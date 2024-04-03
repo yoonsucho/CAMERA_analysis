@@ -770,6 +770,20 @@ bind_rows(
 ```
 
 
+```{r, fig.width=7, fig.height=3}
+bind_rows(
+  temp %>% mutate(what="AF + LD"),
+  temp2 %>% mutate(what="AF")
+) %>%
+  group_by(pop, what) %>%
+    do({summary(lm(I(1/Fstat.x) ~ I(1/Fstat.y), data=.))$coef %>% as_tibble %>% slice_tail(n=1)}) %>%
+  {ggplot(., aes(x=pop, y=Estimate)) +
+      geom_point(aes(colour=what), position=position_dodge(width=0.5)) +
+      geom_errorbar(aes(ymin=Estimate - `Std. Error` * 1.96, ymax = Estimate + `Std. Error` * 1.96, colour=what), position=position_dodge(width=0.5), width=0) +
+      labs(colour="Source", y="Weak instrument bias increase\nrelative to EUR discovery", x="Population")
+  }
+```
+
 The difference in 1/F would be ~2 for Africans without the LD problem (i.e. if you introduce fine mapping effectively).
 
 Quick look at r2 distributions to check they're ok
