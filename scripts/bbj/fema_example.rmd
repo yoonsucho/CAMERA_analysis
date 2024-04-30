@@ -1,15 +1,20 @@
+```{r}
+
 library(dplyr)
 library(here)
 library(CAMeRa)
 library(ggplot2)
+
+here::set_here("~/repo/CAMERA_analysis")
 
 load(here("data", "bbj", "examples_sbp_t2d.rdata"))
 ls()
 
 i <- 6
 x$plot_regional_instruments(names(x$instrument_regions)[i]) + facet_grid(pop ~ region, scale="free_y")
+```
 
-
+```{r}
 p <- function (region, instrument_regions = x$instrument_regions, meta_analysis_regions = x$instrument_fema_regions) {
     r <- instrument_regions[[region]]
     d <- meta_analysis_regions[[region]]
@@ -39,6 +44,8 @@ p <- function (region, instrument_regions = x$instrument_regions, meta_analysis_
         ggplot2::facet_grid(pop ~ ., scale="free_y") +
         theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
 }
+```
+
 
 6
 13
@@ -47,9 +54,80 @@ p <- function (region, instrument_regions = x$instrument_regions, meta_analysis_
 49
 61
 
+```{r}
+i <- 61
+pl <- p(names(x$instrument_regions)[i])
+pl
+```
 
+```{r}
+a <- x$instrument_regions[[names(x$instrument_regions)[i]]]
+b <- x$instrument_fema_regions[[names(x$instrument_fema_regions)[i]]]
+th <- b[which.min(b$p),]
+
+lapply(a, \(i) i %>% filter(rsid == th$rsid)) %>% bind_rows()
+
+```
+
+
+```{r}
+pl
+```
+
+```{r}
+
+est_sd <- function(n, af, se) {
+  (se^2 * n * 2 * af * (1-af)) %>% sqrt %>% mean(na.rm=TRUE)
+}
+
+sd_standardise <- function(dat = x$instrument_raw, ncol="n") {
+  dat %>%
+    dplyr::group_by(id) %>%
+    dplyr::do({
+      sdhat <- est_sd(.[[ncol]], .$eaf, .$se)
+      mutate(., beta = beta / sdhat, se = se / sdhat)
+    }) %>%
+    dplyr::ungroup()
+}
+
+x$instrument_raw[1,1]
+```
+
+
+```{r}
+x$get_metadata()
+i <- j <- 2
+for(i in 1:length(x$instrument_regions)) {
+  for(j in 1:length(x$instrument_regions[[i]])) {
+    message(i, j)
+    id <- x$instrument_regions[[i]][[j]]$id[1]
+    n <- x$exposure_metadata$sample_size[x$exposure_metadata$id == id]
+    x$instrument_regions[[i]][[j]]$n[is.na(x$instrument_regions[[i]][[j]]$n)] <- n
+    x$instrument_regions[[i]][[j]] <- sd_standardise(x$instrument_regions[[i]][[j]])
+  }
+}
+
+x$instrument_raw <- sd_standardise(x$instrument_raw, ncol="samplesize")
+
+x$instrument_regions[[1]][[1]]
+x$instrument_regions[[1]][[2]]
+```
+
+
+```{r}
+x$fema_regional_instruments()
+```
+
+
+
+```{r}
 i <- 43
 pl <- p(names(x$instrument_regions)[i])
 pl
+```
+
+
+```{r}
 ggsave(pl, file=here("results", "fema_example.pdf"), width=4, height=6)
 ggsave(pl, file=here("results", "fema_example.png"), width=4, height=6)
+```
