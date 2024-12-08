@@ -1,0 +1,155 @@
+---
+title: UKB T2D by adiposty and ancestry
+---
+
+
+```{r}
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyr)
+library(TwoSampleMR)
+```
+
+
+
+## Organise data
+
+codes:
+
+- trunk fat percentage = 23127
+- body fat percentage = 23099
+- body mass index = 21001
+
+```{r}
+case <- fread("t2dcases.csv") %>% mutate(t2d=1)
+cont <- fread("t2dcontrols.csv") %>% mutate(t2d=0)
+
+anc <- fread("ukb_InferredAncestry.txt") %>% as_tibble() %>% select(eid=FID, anc=Ancestry)
+
+dat <- rbind(case, cont) %>% left_join(anc, by="eid")
+dat <- subset(dat, !grepl(";", anc)) %>% filter(!is.na(anc))
+
+names(dat) <- c("eid", "tfp", "bfp", "bmi", "sex", "age", "age2", "t2d", "anc")
+```
+
+
+
+```{r}
+table(dat$anc)
+```
+
+
+The effect of TFP on BMI is different by ancestry:
+
+```{r}
+dat %>% group_by(anc) %>% summarise(b_tfp_bmi = lm(bmi ~ tfp)$coef[2])
+dat
+```
+
+The response of BMI to TFP is about 25% lower in EAS than EUR. Get the MR estimate:
+
+```{r}
+adi <- make_dat("ukb-b-16407", c("ieu-b-40", "bbj-a-1"))
+mr(adi, method_list="mr_ivw")
+```
+
+The response of BMI to TFP is substantially lower in BBJ than in EUR.
+
+What is the influence of TFP on T2D? This is a naive estimate, using the same EUR bgx for the EUR and EAS outcome:
+
+```{r}
+adi2 <- make_dat("ukb-b-16407", c("ebi-a-GCST006867", "ebi-a-GCST010118", "ukb-e-250_CSA", "ukb-e-250_AFR"))
+mr(adi2, method_list="mr_ivw")
+```
+
+
+```{r}
+adi3 <- make_dat("ukb-b-8909", c("ebi-a-GCST006867", "ebi-a-GCST010118", "ukb-e-250_CSA", "ukb-e-250_AFR"))
+mr(adi3, method_list="mr_ivw")
+
+```
+
+
+```{r}
+dat %>% filter(
+    bmi < 40
+) %>% 
+    ggplot(aes(x=tfp, y=bmi, color=anc)) + geom_smooth(se=FALSE) +
+    scale_colour_brewer(type="qual")
+```
+
+EAS and SAS have higher TFP for a given BMI
+
+```{r}
+dat %>% mutate(tfp_bins = round(tfp)) %>%
+    group_by(tfp_bins, anc) %>%
+    summarise(t2d_prev = mean(t2d, na.rm=T)) %>%
+    ggplot(aes(x=tfp_bins, y=t2d_prev, color=anc)) + 
+        geom_smooth(se=FALSE) +
+        scale_colour_brewer(type="qual")
+```
+
+
+```{r}
+
+ggplot(dat, aes(x=tfp, y=t2d, color=anc)) + 
+    geom_smooth() +
+    scale_colour_brewer(type="qual")
+
+```
+
+
+
+```{r}
+ggplot(dat, aes(x=bmi, y=t2d, color=anc)) + 
+    geom_smooth() +
+    scale_colour_brewer(type="qual")
+```
+
+
+```{r}
+group_by(dat, anc) %>%
+    summarise(t2d_prev = mean(t2d, na.rm=T))
+```
+
+
+
+```{r}
+ggplot(dat, aes(x=bmi)) +
+geom_density(aes(fill=anc), alpha=0.5) +
+scale_fill_brewer(type="qual")
+```
+
+
+```{r}
+ggplot(dat, aes(x=tfp)) +
+geom_density(aes(fill=anc), alpha=0.5) +
+scale_fill_brewer(type="qual")
+```
+
+```{r}
+ggplot(dat, aes(x=bfp)) +
+geom_density(aes(fill=anc), alpha=0.5) +
+scale_fill_brewer(type="qual")
+```
+
+
+```{r}
+library(tidyr)
+
+dat %>% 
+    select(eid, tfp, bfp, bmi, anc) %>%
+    tidyr::pivot_longer(-c(eid, anc), names_to="measure") %>%
+    group_by(anc, measure) %>%
+    summarise(mean = mean(value, na.rm=T), sd = sd(value, na.rm=T)) %>%
+    ggplot(aes(y=anc, x=mean, colour=anc)) +
+    geom_point() +
+    geom_errorbarh(aes(xmin=mean-sd, xmax=mean+sd), height=0.1) +
+    facet_grid(measure ~ ., scales="free_x") +
+    scale_colour_brewer(type="qual")
+
+group_by(dat, anc) %>%
+
+    summarise(t2d_prev = mean(t2d, na.rm=T))
+
