@@ -1,0 +1,214 @@
+---
+title: Simulating across various scenarios
+---
+
+## Background
+
+- Scenario 1: Use EUR discovery bgx for all ancestries
+- Scenario 2: Use EUR discovery SNP, re-estimate bgx in all ancestries
+- Scenario 3: Use meta analysis bgx to discovery SNP, re-estimate in all ancestries
+
+
+
+```{r}
+library(simulateGP)
+library(dplyr)
+library(data.table)
+library(here)
+library(TwoSampleMR)
+```
+
+
+
+```{r}
+organise_ldobj <- function(dirs, region)
+{
+  ld <- lapply(dirs, \(x) readRDS(file.path(x, paste0("ldobj_", region, ".rds"))))
+  x1 <- unique(ld[[1]]$map$snp)
+  x <- Reduce(intersect, lapply(ld, \(x) x$map$snp))
+  ld <- lapply(ld, \(y) subset_ldobj(y, x))
+  names(ld) <- gsub("ld", "", basename(dirs))
+  stopifnot(all(ld[[1]]$map$snp == ld[[2]]$map$snp))
+  return(ld)
+}
+
+
+subset_ldobj <- function(ldobj, snps)
+{
+  i <- which(ldobj$map$snp %in% snps)
+  ldobj$map <- ldobj$map[i,]
+  ldobj$ld <- ldobj$ld[i,i]
+  return(ldobj)
+}
+
+dirs <- here("data", "ld", c("ldAFR", "ldAMR", "ldEAS", "ldEUR", "ldSAS"))
+region <- "1_83991748_84844495"
+ld <- organise_ldobj(dirs, region)
+str(ld)
+```
+
+
+```{r}
+nid <- list(EUR=100000, AFR=10000, AMR=10000, EAS=10000, SAS=10000)
+bxy <- list(EUR=0.1, AFR=0.1, AMR=0.1, EAS=0.1, SAS=0.1)
+
+simss <- function(ld, nid, bxy) {
+    ax <- ld[["EUR"]]$map %>%
+        generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
+        generate_gwas_ss(nid=nid[["EUR"]], ldobj=ld[["EUR"]])
+    ay <- ax %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[["EUR"]]) %>%
+        generate_gwas_ss(nid=nid[["EUR"]], ldobj=ld[["EUR"]])
+    a <- merge(ax, ay, by=c("chr", "snp", "pos", "alt", "ref", "af"))
+
+    pops <- names(ld)[!names(ld) %in% "EUR"]
+
+    b <- lapply(pops, \(pop) {
+        bx <- ld[[pop]]$map %>%
+            generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
+            generate_gwas_ss(nid=nid[[pop]], ldobj=ld[[pop]])
+        by <- bx %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[[pop]]) %>%
+            generate_gwas_ss(nid=nid[[pop]], ldobj=ld[[pop]])
+        b <- merge(bx, by, by=c("chr", "snp", "pos", "alt", "ref", "af"))
+    })
+    names(b) <- pops
+    return(list(a=a, b=b))
+}
+
+o <- simss(ld, nid, bxy)
+```
+
+```{r}
+fixed_effects_meta_analysis <- function(beta_vec, se_vec, infl=10000) {
+    ind <- identify_blownup_estimates(beta_vec, se_vec, infl)
+    beta_vec[ind] <- NA
+    se_vec[ind] <- NA
+    w <- 1 / se_vec^2
+    beta <- sum(beta_vec * w, na.rm=T) / sum(w, na.rm=T)
+    se <- sqrt(1 / sum(w, na.rm=T))
+    pval <- pnorm(abs(beta / se), lower.tail = FALSE)
+    Qj <- w * (beta-beta_vec)^2
+    Q <- sum(Qj, na.rm=T)
+    Qdf <- sum(!is.na(beta_vec))-1
+    if(Qdf == 0) Q <- 0
+    Qjpval <- pchisq(Qj, 1, lower.tail=FALSE)
+    Qpval <- pchisq(Q, Qdf, lower.tail=FALSE)
+    return(list(beta=beta, se=se, pval=pval, Q=Q, Qdf=Qdf, Qpval=Qpval, Qj=Qj, Qjpval=Qjpval))
+}
+
+identify_blownup_estimates <- function(b, se, infl) {
+  semin <- which.min(se)
+  abs(b) > infl*abs(b[semin])
+}
+
+fixed_effects_meta_analysis_fast <- function(beta_mat, se_mat) {
+  w <- 1 / se_mat^2
+  beta <- rowSums(beta_mat * w) / rowSums(w, na.rm=TRUE)
+  se <- sqrt(1 / rowSums(w, na.rm=TRUE))
+  z <- abs(beta / se)
+  p <- pnorm(z, lower.tail = FALSE)
+  nstudy <- apply(beta_mat, 1, \(x) sum(!is.na(x)))
+  return(tibble(nstudy, p, z=z))
+}
+
+scenario1 <- function(a, b) {
+    as <- a[which.min(a$pval.x),]
+    mra <- mr_wald_ratio(as$bhat.x, as$bhat.y, as$se.x, as$se.y) %>% as_tibble() %>%
+        mutate(pop="EUR", fstat=as$fval.x, cv=as$beta.x!=0)
+        
+
+    mrb <- lapply(names(b), \(pop) {
+        bs <- subset(b[[pop]], snp == as$snp)
+        mrb <- mr_wald_ratio(as$bhat.x, bs$bhat.y, as$se.x, bs$se.y) %>% as_tibble() %>%
+            mutate(pop=pop, fstat=bs$fval.x, cv=bs$beta.x!=0)
+        return(mrb)
+    }) %>% bind_rows()
+
+
+    res <- bind_rows(mra, mrb)
+    q <- fixed_effects_meta_analysis(res$b, res$se)
+    res$Qjpval <- q$Qjpval
+    bind_rows(res, tibble(b=q$beta, se=q$se, pval=q$pval, pop="All", nsnp=1, Qjpval=q$Qpval)) %>%
+        mutate(scanerio=1)
+}
+
+scenario2 <- function(a, b) {
+    as <- a[which.min(a$pval.x),]
+    mra <- mr_wald_ratio(as$bhat.x, as$bhat.y, as$se.x, as$se.y) %>% as_tibble() %>%
+        mutate(pop="EUR", fstat=as$fval.x, cv=as$beta.x!=0)
+        
+
+    mrb <- lapply(names(b), \(pop) {
+        bs <- subset(b[[pop]], snp == as$snp)
+        mrb <- mr_wald_ratio(bs$bhat.x, bs$bhat.y, bs$se.x, bs$se.y) %>% as_tibble() %>%
+            mutate(pop=pop, fstat=bs$fval.x, cv=bs$beta.x!=0)
+        return(mrb)
+    }) %>% bind_rows()
+
+
+    res <- bind_rows(mra, mrb)
+    q <- fixed_effects_meta_analysis(res$b, res$se)
+    res$Qjpval <- q$Qjpval
+    bind_rows(res, tibble(b=q$beta, se=q$se, pval=q$pval, pop="All", nsnp=1, Qjpval=q$Qpval)) %>%
+        mutate(scanerio=2)
+}
+
+
+scenario3 <- function(a, b) {
+    bmat <- cbind(a$bhat.x, lapply(b, \(x) x$bhat.x) %>% do.call(cbind, .))
+    semat <- cbind(a$se.x, lapply(b, \(x) x$se.x) %>% do.call(cbind, .))
+    fema <- fixed_effects_meta_analysis_fast(bmat, semat)
+    which.min(fema$p)
+    which.min(a$pval.x)
+    snp <- which.min(fema$p)
+    as <- a[snp,]
+    mra <- mr_wald_ratio(as$bhat.x, as$bhat.y, as$se.x, as$se.y) %>% as_tibble() %>%
+        mutate(pop="EUR", fstat=as$fval.x, cv=as$beta.x!=0)
+        
+
+    mrb <- lapply(names(b), \(pop) {
+        bs <- subset(b[[pop]], snp == as$snp)
+        mrb <- mr_wald_ratio(bs$bhat.x, bs$bhat.y, bs$se.x, bs$se.y) %>% as_tibble() %>%
+            mutate(pop=pop, fstat=bs$fval.x, cv=bs$beta.x!=0)
+        return(mrb)
+    }) %>% bind_rows()
+
+
+    res <- bind_rows(mra, mrb)
+    q <- fixed_effects_meta_analysis(res$b, res$se)
+    res$Qjpval <- q$Qjpval
+    bind_rows(res, tibble(b=q$beta, se=q$se, pval=q$pval, pop="All", nsnp=1, Qjpval=q$Qpval)) %>%
+        mutate(scanerio=3)
+}
+
+scenario1(o$a, o$b)
+scenario2(o$a, o$b)
+scenario3(o$a, o$b)
+```
+
+
+```{r}
+sim <- function(neur, nmult, bxy, bhet, region) {
+  args <- as.list(environment()) %>% as_tibble()
+  dirs <- here("data", "ld", c("ldAFR", "ldAMR", "ldEAS", "ldEUR", "ldSAS"))
+  ld <- organise_ldobj(dirs, region)
+  nid <- list(EUR=neur, AFR=neur*nmult, AMR=neur*nmult, EAS=neur*nmult, SAS=neur*nmult)
+  bxy <- as.list(rnorm(length(nid), bxy, bhet))
+  names(bxy) <- names(nid)
+  o <- simss(ld, nid, bxy)
+  bind_rows(
+    scenario1(o$a, o$b),
+    scenario2(o$a, o$b),
+    scenario3(o$a, o$b)
+  ) %>% bind_cols(args)
+}
+
+res <- sim(100000, 10, 0.1, 0.1, "1_83991748_84844495")
+
+```
+
+
+
+
+
+
+
