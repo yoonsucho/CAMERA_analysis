@@ -11,6 +11,7 @@ knitr::opts_chunk$set(cache=TRUE)
 ```{r}
 library(CAMeRa)
 library(ggplot2)
+library(ggstance)
 library(dplyr)
 library(here)
 library(ieugwasr)
@@ -50,7 +51,28 @@ mrres %>%
     filter(Qjpval < 0.05)
 ```
 
+```{r}
+mrres %>% 
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>%
+    filter(pops == "All") %>%
+    mutate(Qfdr = p.adjust(Qjpval, "fdr")) %>% as.data.frame
+    filter(Qfdr < 0.05)
+```
+
+
 Not really after multiple testing correction.
+
+
+```{r}
+mrres %>% 
+    filter(instrument=="Raw" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>%
+    filter(pops == "All") %>%
+    mutate(Qfdr = p.adjust(Qjpval, "fdr")) %>%
+    filter(Qfdr < 0.05)
+```
+
+
+
 
 ```{r}
 mrres %>% 
@@ -101,6 +123,18 @@ ggsave(here("results", "bbj_mrres_raw.pdf"), width=10, height=8)
 ```
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 ## Simulation to check interpretation
 
 T2D in East Asians onset occurs at a lower BMI threshold. What should this do to the effect of BMI on T2D?
@@ -111,7 +145,7 @@ bmi <- rnorm(n, 22, 5)
 l1 <- rep(0.02, n)
 l1[bmi > 26] <- bmi[bmi > 26] * 0.01
 l2 <- rep(0.02, n)
-l2[bmi > 23] <- bmi[bmi > 23] * 0.005
+l2[bmi > 23] <- bmi[bmi > 23] * 0.01
 t2d1 <- rbinom(n, 1, plogis(l1))
 t2d2 <- rbinom(n, 1, plogis(l2))
 table(t2d1)
@@ -123,6 +157,192 @@ summary(glm(t2d2 ~ bmi, family="binomial"))
 
 - Higher starting point leads to higher effect size
 - That means that the slope must be smaller. Effect size is much more sensitive to slope than to starting point 
+
+
+
+```{r}
+adip1 <- rnorm(n, 0, 5)
+adip2 <- rnorm(n, 0, 5)
+bmi1 <- adip1 * 2 + rnorm(n, 22, 5)
+bmi2 <- adip2 * 5 + rnorm(n, 22, 5)
+t2d1 <- rbinom(n, 1, plogis(0.02 * adip1))
+t2d2 <- rbinom(n, 1, plogis(0.02 * adip2))
+
+summary(glm(t2d1 ~ bmi1, family="binomial"))
+summary(glm(t2d2 ~ bmi2, family="binomial"))
+
+
+tapply(bmi1, t2d1, mean)
+tapply(bmi2, t2d2, mean)
+
+```
+
+
+
+
+## Reanalyse BMI and T2D
+
+```{r}
+load(here("data/bbj/examples_bmi_t2d.rdata"))
+
+x$instrument_raw %>% head
+
+library(TwoSampleMR)
+
+dat <- make_dat("ieu-b-40", c("ebi-a-GCST006867", "ebi-a-GCST010118"))
+a <- mr(dat)
+```
+
+
+```{r}
+subset(mrres, exposure == "Body Mass Index" & outcome == "Type 2 Diabetes")
+```
+
+
+```{r}
+md <- make_dat("ieu-b-40", "ukb-e-250_CSA")
+mr(md)
+```
+
+
+```{r}
+adi <- make_dat("ukb-b-16407", c("ieu-b-40", "bbj-a-1"))
+mr(adi, method_list="mr_ivw")
+```
+
+
+```{r}
+adi2 <- make_dat("ukb-b-16407", c("ebi-a-GCST006867", "ebi-a-GCST010118", "ukb-e-250_CSA"))
+mr(adi2, method_list="mr_ivw")
+```
+
+
+
+Naive estimates
+Eur exposure -> Eur outcome
+Eur exposure -> EAS outcome
+
+```{r}
+analysis_plan <- filter(mrres, pops == "All") %>%
+    filter(instrument=="FEMA" & eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>%
+    group_by(exposure, outcome) %>% do({
+    tibble(
+        id_x = .$eur_id_x[1],
+        id_y = c(.$eur_id_y[1], .$eas_id_y[1]),
+        pop = c("EUR", "EAS")
+    )
+})
+
+naive_dat <- group_by(analysis_plan, exposure, outcome) %>% do({
+    X <- .
+    dat <- make_dat(unique(X$id_x), unique(X$id_y))
+    dat
+})
+
+
+naive_dat2 <- subset(naive_dat, paste(id.exposure, id.outcome) %in% paste(analysis_plan$id_x, analysis_plan$id_y))
+dim(naive_dat2)
+dim(naive_dat)
+
+
+
+naive_res <- group_by(analysis_plan, exposure, outcome) %>% do({
+    X <- .
+    dat <- subset(naive_dat, id.exposure == X$id_x & id.outcome %in% X$id_y)
+    a <- mr(dat, method_list=c("mr_wald_ratio", "mr_ivw"))
+    fe <- fixed_effects_meta_analysis(a$b, a$se)
+    a %>% select(id.exposure, id.outcome, nsnp, b, se, pval)
+    a$Qj <- fe$Qj
+    a$Qjpval <- fe$Qjpval
+    a$pops <- c("EUR", "EAS")
+    fe <- tibble(b=fe$beta, se=fe$se, pval=fe$pval, Qj=fe$Q, Qjpval=fe$Qpval, pops="All")
+    bind_rows(fe, a) %>% select(-c(exposure, outcome)) %>% mutate(instrument="Naive")
+})
+
+naive_res %>% filter(pops == "All") %>%
+    mutate(Qfdr = p.adjust(Qjpval, "fdr")) %>%
+    filter(Qfdr < 0.05)
+
+    
+    a <- subset(X, select=c(id_y, pop)) %>% left_join(., a, by=c("id_y"="id.outcome"))
+    fe <- fixed_effects_meta_analysis(a$b, a$se)
+    a$Q
+    return(a)
+
+```
+
+
+```{r}
+o <- mrres %>% filter(eur_id_x != "ieu-b-38" & eur_id_y != "ieu-b-38" & outcome != "Schizophrenia" & eas_id_y != "bbj-a-52") %>% 
+    select(pops, b=Estimate, se=`Std. Error`, pval=`Pr(>|t|)`, Qj, Qjpval, exposure, outcome, instrument) %>% bind_rows(naive_res)
+o %>% filter(pops=="All") %>% group_by(instrument) %>% mutate(Qfdr = p.adjust(Qjpval, "fdr")) %>% summarise(nsig=sum(Qfdr < 0.05))
+```
+
+
+```{r}
+o %>% filter(instrument == "Naive") %>%
+ggplot(aes(x=b, y=pops)) +
+    facet_grid(outcome ~ exposure) +
+    geom_point(aes(colour=instrument)) +
+    geom_vline(xintercept=0, linetype="dotted") +
+    geom_errorbarh(aes(xmin=b - se * 1.96, xmax=b + se * 1.96, colour=instrument), height=0) +
+    geom_vline(xintercept=0, linetype="dotted") +
+    facet_grid(outcome ~ exposure) +
+    theme(strip.text.y=element_text(angle=0), legend.position="none") +
+    labs(y="")
+```
+
+
+```{r}
+o %>%
+    filter(instrument=="Naive") %>% 
+    mutate(lci = b - 1.96 * se, uci = b + 1.96 * se) %>%
+    mutate(lci = pmax(-0.6, lci), uci = pmin(1.1, uci)) %>%
+    {
+    ggplot(., aes(x=b, y=pops)) +
+    geom_rect(data=subset(., pops == "All"), aes(alpha = Qjpval < 0.05), xmin = -Inf,xmax = Inf, ymin = -Inf, ymax = Inf, fill="yellow") +
+    geom_vline(xintercept=0, linetype="dotted") +
+    geom_point(aes(colour=instrument), position=ggstance::position_dodgev(0.3)) +
+    geom_errorbarh(aes(colour=instrument, xmin=lci, xmax=uci), height=0, position=ggstance::position_dodgev(0.3)) + 
+    facet_grid(outcome ~ exposure) +
+    theme(strip.text.y=element_text(angle=0), legend.position="bottom") +
+    scale_alpha_manual(values=c(0, 0.2)) +
+    xlim(-0.6, 1.1) +
+    labs(y="") +
+    scale_colour_brewer(type="qual")
+}
+ggsave(here("results", "bbj_mrres_naive.pdf"), width=10, height=8)
+```
+
+
+```{r}
+o %>%
+    # filter(instrument=="Naive") %>% 
+    mutate(lci = b - 1.96 * se, uci = b + 1.96 * se) %>%
+    mutate(lci = pmax(-0.6, lci), uci = pmin(1.1, uci)) %>%
+    {
+    ggplot(., aes(x=b, y=pops)) +
+    geom_rect(data=subset(., pops == "All"), aes(alpha = Qjpval < 0.05), xmin = -Inf,xmax = Inf, ymin = -Inf, ymax = Inf, fill="yellow") +
+    geom_vline(xintercept=0, linetype="dotted") +
+    geom_point(aes(colour=instrument), position=ggstance::position_dodgev(0.3)) +
+    geom_errorbarh(aes(colour=instrument, xmin=lci, xmax=uci), height=0, position=ggstance::position_dodgev(0.3)) + 
+    facet_grid(outcome ~ exposure) +
+    theme(strip.text.y=element_text(angle=0), legend.position="bottom") +
+    scale_alpha_manual(values=c(0, 0.2)) +
+    xlim(-0.6, 1.1) +
+    labs(y="") +
+    scale_colour_brewer(type="qual")
+}
+ggsave(here("results", "bbj_mrres_all.pdf"), width=10, height=8)
+```
+
+
+
+
+```{r}
+subset(mrres, pops == "All" & instrument == "FEMA") %>% mutate(Qfdr = p.adjust(Qjpval, "fdr")) %>% filter(Qfdr < 0.05) %>% {.$f}
+```
+
 
 Power increase
 
