@@ -16,6 +16,7 @@ library(dplyr)
 library(data.table)
 library(here)
 library(TwoSampleMR)
+library(furrr)
 ```
 
 
@@ -187,7 +188,7 @@ scenario3(o$a, o$b)
 
 
 ```{r}
-sim <- function(neur, nmult, bxy, bhet, region) {
+sim <- function(neur, nmult, bxy, bhet, region, nsim=1) {
   args <- as.list(environment()) %>% as_tibble()
   dirs <- here("data", "ld", c("ldAFR", "ldAMR", "ldEAS", "ldEUR", "ldSAS"))
   ld <- organise_ldobj(dirs, region)
@@ -202,13 +203,28 @@ sim <- function(neur, nmult, bxy, bhet, region) {
   ) %>% bind_cols(args)
 }
 
-res <- sim(100000, 10, 0.1, 0.1, "1_83991748_84844495")
-
+res <- sim(100000, 0.1, 0.1, 0.1, "1_83991748_84844495")
 ```
 
 
+```{r}
+regions <- c("12_106958748_109025901", "14_101534307_103012102", "1_83991748_84844495", "2_14335308_16329735", "5_110821144_111981562", "5_140645971_142981248", "6_134244243_136224177", "6_151912703_153094496", "6_42038721_43756169", "7_135591083_136876562")
+param <- expand.grid(
+  neur=c(100000),
+  nmult=c(0.1, 0.5, 1),
+  bxy=c(0.1),
+  bhet=seq(0, 0.05, 0.01),
+  region=regions,
+  nsim=1:3
+)
+param
+```
 
 
+```{r}
+future::plan('multicore', workers=60)
+opt <- furrr_options(seed=TRUE)
+res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
+saveRDS(res, here("results", "scenario_simulations.rds"))
 
-
-
+```
