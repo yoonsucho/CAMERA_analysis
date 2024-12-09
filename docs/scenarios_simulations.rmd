@@ -226,5 +226,40 @@ future::plan('multicore', workers=60)
 opt <- furrr_options(seed=TRUE)
 res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
 saveRDS(res, here("results", "scenario_simulations.rds"))
+```
+
+
+## Analysis
+
+```{r}
+library(ggplot2)
+res <- readRDS(here("results", "scenario_simulations.rds"))
+res %>% filter(pop=="All") %>% group_by(scanerio, nmult, bxy, bhet) %>% summarise(het=sum(Qjpval < 0.05)/n(), n=n()) %>%
+    ggplot(aes(y=het, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult*bxy)
+
+```
+
+
+```{r}
+ggplot(res, aes(x=pop, y=fstat, fill=as.factor(nmult))) +
+geom_violin()
+```
+
+
+## Run 2
+
+```{r}
+param <- expand.grid(
+  neur=c(100000),
+  nmult=c(0.1, 0.5, 1),
+  bxy=c(0.5),
+  bhet=seq(0, 0.05, 0.01),
+  region=regions,
+  nsim=20:40
+)
+future::plan('multicore', workers=150)
+opt <- furrr_options(seed=TRUE)
+res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
+saveRDS(res, here("results", "scenario_simulations2.rds"))
 
 ```
