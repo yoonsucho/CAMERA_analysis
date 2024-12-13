@@ -17,6 +17,7 @@ library(data.table)
 library(here)
 library(TwoSampleMR)
 library(furrr)
+library(parallel)
 ```
 
 
@@ -26,7 +27,7 @@ organise_ldobj <- function(dirs, region)
 {
   ld <- lapply(dirs, \(x) readRDS(file.path(x, paste0("ldobj_", region, ".rds"))))
   x1 <- unique(ld[[1]]$map$snp)
-  x <- Reduce(intersect, lapply(ld, \(x) x$map$snp))
+  x <- Reduce(intersect, lapply(ld, \(x) x$map$snp))[1:500]
   ld <- lapply(ld, \(y) subset_ldobj(y, x))
   names(ld) <- gsub("ld", "", basename(dirs))
   stopifnot(all(ld[[1]]$map$snp == ld[[2]]$map$snp))
@@ -50,32 +51,97 @@ str(ld)
 
 
 ```{r}
-nid <- list(EUR=100000, AFR=10000, AMR=10000, EAS=10000, SAS=10000)
-bxy <- list(EUR=0.1, AFR=0.1, AMR=0.1, EAS=0.1, SAS=0.1)
+ld_fast <- function(params, nid, ld, minmaf=0.01) {
+    xvar <- sqrt(2 * params[["af"]] * (1-params[["af"]]))
+    params %>%
+        dplyr::mutate(
+            af = pmax(minmaf, af) %>% pmin(1-minmaf, 1-af),
+            beta_ld = (diag(1/xvar) %*% ld %*% diag(xvar) %*% beta) %>% drop(),
+            se = expected_se(beta_ld, af, nid, vy=1),
+            bhat = stats::rnorm(length(beta_ld), beta_ld, se),
+            fval = (bhat / se)^2,
+            n = nid,
+            pval = pf(fval, df1=1, df2=nid-1, lower.tail=FALSE)
+        )
+}
 
-simss <- function(ld, nid, bxy) {
+
+# ax1 <- ld[["EUR"]]$map %>%
+#         generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) 
+
+# microbenchmark(ax <- ax1 %>%
+#         ld_fast(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld), times=1)
+
+# library(microbenchmark)
+# microbenchmark(ax2 <- ax1 %>%
+#         generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld), times=1)
+
+# microbenchmark(ax3 <- ax1 %>%
+#         generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld), times=1)
+
+# head(ax)
+# head(ax2)
+
+# var(ax$bhat)
+# var(ax2$bhat)
+
+# cor(ax$bhat, ax2$bhat)
+# cor(ax3$bhat, ax2$bhat)
+# lm(ax$bhat ~ ax2$bhat)
+
+# pdf()
+# plot(ax$bhat, ax2$bhat)
+```
+
+```{r}
+simss_fast <- function(ld, nid, bxy, h2=0.05) {
     ax <- ld[["EUR"]]$map %>%
-        generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
-        generate_gwas_ss(nid=nid[["EUR"]], ldobj=ld[["EUR"]])
+        generate_gwas_params(h2=h2, S=0, Pi=1/nrow(.)) %>%
+        ld_fast(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
     ay <- ax %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[["EUR"]]) %>%
-        generate_gwas_ss(nid=nid[["EUR"]], ldobj=ld[["EUR"]])
+        ld_fast(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
     a <- merge(ax, ay, by=c("chr", "snp", "pos", "alt", "ref", "af"))
 
     pops <- names(ld)[!names(ld) %in% "EUR"]
 
     b <- lapply(pops, \(pop) {
         bx <- ld[[pop]]$map %>%
-            generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
-            generate_gwas_ss(nid=nid[[pop]], ldobj=ld[[pop]])
+            mutate(beta=ax$beta) %>%
+            ld_fast(nid=nid[[pop]], ld=ld[[pop]]$ld)
         by <- bx %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[[pop]]) %>%
-            generate_gwas_ss(nid=nid[[pop]], ldobj=ld[[pop]])
+            ld_fast(nid=nid[[pop]], ld=ld[[pop]]$ld)
+        b <- merge(bx, by, by=c("chr", "snp", "pos", "alt", "ref", "af"))
+    })
+    names(b) <- pops
+    return(list(a=a, b=b))
+
+}
+```
+
+
+```{r}
+
+simss <- function(ld, nid, bxy) {
+    ax <- ld[["EUR"]]$map %>%
+        generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
+        generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
+    ay <- ax %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[["EUR"]]) %>%
+        generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
+    a <- merge(ax, ay, by=c("chr", "snp", "pos", "alt", "ref", "af"))
+
+    pops <- names(ld)[!names(ld) %in% "EUR"]
+
+    b <- lapply(pops, \(pop) {
+        bx <- ld[[pop]]$map %>%
+            mutate(beta=ax$beta) %>%
+            generate_gwas_ss(nid=nid[[pop]], ld=ld[[pop]]$ld)
+        by <- bx %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[[pop]]) %>%
+            generate_gwas_ss(nid=nid[[pop]], ld=ld[[pop]]$ld)
         b <- merge(bx, by, by=c("chr", "snp", "pos", "alt", "ref", "af"))
     })
     names(b) <- pops
     return(list(a=a, b=b))
 }
-
-o <- simss(ld, nid, bxy)
 ```
 
 ```{r}
@@ -180,10 +246,23 @@ scenario3 <- function(a, b) {
     bind_rows(res, tibble(b=q$beta, se=q$se, pval=q$pval, pop="All", nsnp=1, Qjpval=q$Qpval)) %>%
         mutate(scanerio=3)
 }
+```
 
-scenario1(o$a, o$b)
-scenario2(o$a, o$b)
-scenario3(o$a, o$b)
+```{r}
+nid <- list(EUR=1000000, AFR=100000, AMR=100000, EAS=100000, SAS=100000)
+bxy <- list(EUR=0.3, AFR=0.3, AMR=0.3, EAS=0.3, SAS=0.3)
+o3 <- simss_fast(ld, nid, bxy)
+
+bxy <- list(EUR=0.3, AFR=0.3, AMR=0.3, EAS=0.3, SAS=-0.3)
+o3h <- simss_fast(ld, nid, bxy)
+
+scenario1(o3$a, o3$b)
+scenario2(o3$a, o3$b)
+scenario3(o3$a, o3$b)
+
+scenario1(o3h$a, o3h$b)
+scenario2(o3h$a, o3h$b)
+scenario3(o3h$a, o3h$b)
 ```
 
 
@@ -213,7 +292,7 @@ param <- expand.grid(
   neur=c(100000),
   nmult=c(0.1, 0.5, 1),
   bxy=c(0.1),
-  bhet=seq(0, 0.05, 0.01),
+  bhet=seq(0, 0.1, 0.2),
   region=regions,
   nsim=1:3
 )
@@ -257,9 +336,33 @@ param <- expand.grid(
   region=regions,
   nsim=20:40
 )
-future::plan('multicore', workers=150)
+future::plan('multicore', workers=60)
 opt <- furrr_options(seed=TRUE)
 res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
 saveRDS(res, here("results", "scenario_simulations2.rds"))
 
+sp <- split(1:nrow(param), 1:60)
+mclapply(1:length(sp), \(x){
+    l <- list()
+    for(i in sp[[x]]) {
+        l[[i]] <- do.call(sim, param[i,])
+    }
+    l <- bind_rows(l)
+    saveRDS(l, here("results", paste0("scenario_simulations2_", x, ".rds")))
+}, mc.cores=60)
+
+
 ```
+
+
+```{r}
+res <- lapply(list.files(here("results"), pattern="scenario_simulations2_", full.name=T), \(x) tryCatch(readRDS(x), error=\(e) return(NULL))) %>% bind_rows()
+dim(res)
+
+library(ggplot2)
+res %>% filter(pop=="All") %>% group_by(scanerio, nmult, bxy, bhet) %>% summarise(het=sum(Qjpval < 0.05)/n(), n=n()) %>%
+    ggplot(aes(y=het, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult*bxy)
+
+
+```
+
