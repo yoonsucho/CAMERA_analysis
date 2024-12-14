@@ -49,6 +49,12 @@ ld <- organise_ldobj(dirs, region)
 str(ld)
 ```
 
+```{r}
+regions <- c("12_106958748_109025901", "14_101534307_103012102", "1_83991748_84844495", "2_14335308_16329735", "5_110821144_111981562", "5_140645971_142981248", "6_134244243_136224177", "6_151912703_153094496", "6_42038721_43756169", "7_135591083_136876562")
+
+ld_objs <- lapply(regions, organise_ldobj, dirs=dirs)
+names(ld_objs) <- regions
+```
 
 ```{r}
 ld_fast <- function(params, nid, ld, minmaf=0.01) {
@@ -121,9 +127,9 @@ simss_fast <- function(ld, nid, bxy, h2=0.05) {
 
 ```{r}
 
-simss <- function(ld, nid, bxy) {
+simss <- function(ld, nid, bxy, h2=0.05) {
     ax <- ld[["EUR"]]$map %>%
-        generate_gwas_params(h2=0.001, S=0, Pi=1/nrow(.)) %>%
+        generate_gwas_params(h2=h2, S=0, Pi=1/nrow(.)) %>%
         generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
     ay <- ax %>% select(chr, snp, pos, alt, ref, af, beta) %>% mutate(beta=beta*bxy[["EUR"]]) %>%
         generate_gwas_ss(nid=nid[["EUR"]], ld=ld[["EUR"]]$ld)
@@ -252,13 +258,13 @@ scenario3 <- function(a, b) {
 nid <- list(EUR=1000000, AFR=100000, AMR=100000, EAS=100000, SAS=100000)
 bxy <- list(EUR=0.3, AFR=0.3, AMR=0.3, EAS=0.3, SAS=0.3)
 o3 <- simss_fast(ld, nid, bxy)
+scenario1(o3$a, o3$b)
+scenario2(o3$a, o3$b)
+scenario3(o3$a, o3$b)
 
 bxy <- list(EUR=0.3, AFR=0.3, AMR=0.3, EAS=0.3, SAS=-0.3)
 o3h <- simss_fast(ld, nid, bxy)
 
-scenario1(o3$a, o3$b)
-scenario2(o3$a, o3$b)
-scenario3(o3$a, o3$b)
 
 scenario1(o3h$a, o3h$b)
 scenario2(o3h$a, o3h$b)
@@ -267,44 +273,66 @@ scenario3(o3h$a, o3h$b)
 
 
 ```{r}
-sim <- function(neur, nmult, bxy, bhet, region, nsim=1) {
+sim <- function(neur, nmult, bxy, bhet, region, h2=0.05, nsim=1) {
   args <- as.list(environment()) %>% as_tibble()
   dirs <- here("data", "ld", c("ldAFR", "ldAMR", "ldEAS", "ldEUR", "ldSAS"))
-  ld <- organise_ldobj(dirs, region)
+  ld <- ld_objs[[region]]
   nid <- list(EUR=neur, AFR=neur*nmult, AMR=neur*nmult, EAS=neur*nmult, SAS=neur*nmult)
   bxy <- as.list(rnorm(length(nid), bxy, bhet))
   names(bxy) <- names(nid)
-  o <- simss(ld, nid, bxy)
-  bind_rows(
+  o <- simss(ld, nid, bxy, h2)
+  r <- bind_rows(
     scenario1(o$a, o$b),
     scenario2(o$a, o$b),
     scenario3(o$a, o$b)
   ) %>% bind_cols(args)
+  bxy <- data.frame(pop=names(bxy), true_bxy=unlist(bxy))
+  r <- left_join(r, bxy, by="pop")
 }
 
-res <- sim(100000, 0.1, 0.1, 0.1, "1_83991748_84844495")
+res <- sim(100000, 0.7, 0.2, 0.3, "1_83991748_84844495")
+res %>% str
 ```
 
 
 ```{r}
-regions <- c("12_106958748_109025901", "14_101534307_103012102", "1_83991748_84844495", "2_14335308_16329735", "5_110821144_111981562", "5_140645971_142981248", "6_134244243_136224177", "6_151912703_153094496", "6_42038721_43756169", "7_135591083_136876562")
 param <- expand.grid(
-  neur=c(100000),
-  nmult=c(0.1, 0.5, 1),
-  bxy=c(0.1),
-  bhet=seq(0, 0.1, 0.2),
-  region=regions,
-  nsim=1:3
+  neur=c(100000, 1000000),
+  nmult=c(0.1, 1),
+  bxy=c(0.2),
+  bhet=c(rep(0, 5), seq(0.05, 0.3, by=0.05)),
+  region=regions[1:5],
+  nsim=1:10
 )
-param
+dim(param)
+res <- do.call(sim, param[1,])
+res
 ```
 
 
 ```{r}
-future::plan('multicore', workers=60)
-opt <- furrr_options(seed=TRUE)
-res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
-saveRDS(res, here("results", "scenario_simulations.rds"))
+res <- purrr::pmap(param, sim, .progress=TRUE) %>% bind_rows()
+saveRDS(res, here("results", "scenario_simulations_a.rds"))
+```
+
+
+```{r}
+param <- expand.grid(
+  neur=c(10000, 100000, 1000000),
+  nmult=c(0.1, 1),
+  bxy=c(0.2, 0),
+  bhet=c(rep(0, 1), seq(0.05, 0.3, by=0.05)),
+  h2=c(0.001, 0.01),
+  region=regions[1:5],
+  nsim=1:100
+)
+dim(param)
+```
+
+
+```{r}
+res <- purrr::pmap(param, sim, .progress=TRUE) %>% bind_rows()
+saveRDS(res, here("results", "scenario_simulations2_b.rds"))
 ```
 
 
@@ -312,57 +340,48 @@ saveRDS(res, here("results", "scenario_simulations.rds"))
 
 ```{r}
 library(ggplot2)
-res <- readRDS(here("results", "scenario_simulations.rds"))
-res %>% filter(pop=="All") %>% group_by(scanerio, nmult, bxy, bhet) %>% summarise(het=sum(Qjpval < 0.05)/n(), n=n()) %>%
-    ggplot(aes(y=het, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult*bxy)
-
-```
-
-
-```{r}
-ggplot(res, aes(x=pop, y=fstat, fill=as.factor(nmult))) +
-geom_violin()
-```
-
-
-## Run 2
-
-```{r}
-param <- expand.grid(
-  neur=c(100000),
-  nmult=c(0.1, 0.5, 1),
-  bxy=c(0.5),
-  bhet=seq(0, 0.05, 0.01),
-  region=regions,
-  nsim=20:40
+res <- bind_rows(
+    readRDS(here("results", "scenario_simulations.rds")),
+    readRDS(here("results", "scenario_simulations2.rds"))
 )
-future::plan('multicore', workers=60)
-opt <- furrr_options(seed=TRUE)
-res <- furrr::future_pmap(param, sim, .options=opt, .progress=TRUE) %>% bind_rows()
-saveRDS(res, here("results", "scenario_simulations2.rds"))
-
-sp <- split(1:nrow(param), 1:60)
-mclapply(1:length(sp), \(x){
-    l <- list()
-    for(i in sp[[x]]) {
-        l[[i]] <- do.call(sim, param[i,])
-    }
-    l <- bind_rows(l)
-    saveRDS(l, here("results", paste0("scenario_simulations2_", x, ".rds")))
-}, mc.cores=60)
-
-
+res$h2[is.na(res$h2)] <- 0.05
+p1 <- res %>% filter(pop=="All") %>% group_by(scanerio, neur, nmult, h2, bhet) %>% summarise(het=sum(Qjpval < 0.05)/n(), n=n()) %>%
+    ggplot(aes(y=het, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult*h2+neur, labeller=label_both) + scale_colour_brewer(type="qual")
+ggsave(p1, file="p1.png")
 ```
 
 
 ```{r}
-res <- lapply(list.files(here("results"), pattern="scenario_simulations2_", full.name=T), \(x) tryCatch(readRDS(x), error=\(e) return(NULL))) %>% bind_rows()
-dim(res)
-
-library(ggplot2)
-res %>% filter(pop=="All") %>% group_by(scanerio, nmult, bxy, bhet) %>% summarise(het=sum(Qjpval < 0.05)/n(), n=n()) %>%
-    ggplot(aes(y=het, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult*bxy)
-
-
+p1 <- res %>% filter(pop=="All") %>% group_by(scanerio, neur, nmult, h2, bxy, bhet) %>% summarise(mse=mean((b-bxy)^2), n=n()) %>%
+    ggplot(aes(y=mse, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult+h2+neur, labeller=label_both) + scale_colour_brewer(type="qual")
+ggsave(p1, file="p2.png")
 ```
 
+
+```{r}
+p1 <- res %>% filter(pop=="All") %>% group_by(scanerio, neur, nmult, h2, bxy, bhet) %>% summarise(pow=mean(pval < 0.05), n=n()) %>%
+    ggplot(aes(y=pow, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult+h2+neur, labeller=label_both) + scale_colour_brewer(type="qual")
+ggsave(p1, file="p3.png")
+```
+
+
+```{r}
+p1 <- res %>% filter(pop=="All") %>% group_by(scanerio, neur, nmult, h2, bxy, bhet) %>% summarise(pow=mean(-log10(pval)), n=n()) %>%
+    ggplot(aes(y=pow, x=bhet, color=factor(scanerio))) + geom_line() + facet_wrap(~nmult+h2+neur, labeller=label_both) + scale_colour_brewer(type="qual")
+ggsave(p1, file="p4.png")
+```
+
+
+```{r}
+p1 <- res %>% filter(pop!="All") %>% group_by(pop, scanerio, neur, nmult, h2, bxy, bhet) %>% summarise(mse=mean((b-true_bxy)^2), n=n()) %>%
+    ggplot(aes(y=mse, x=bhet, color=factor(scanerio))) + geom_line() + facet_grid(pop~nmult+h2+neur, labeller=label_both) + scale_colour_brewer(type="qual") +
+    ylim(0, 1)
+ggsave(p1, file="p5.png")
+```
+
+```{r}
+p1 <- res %>% filter(pop!="All") %>% group_by(pop, scanerio, neur, nmult, h2, bxy, bhet) %>% summarise(pow=mean(pval < 0.05), n=n()) %>%
+    ggplot(aes(y=pow, x=bhet, color=factor(scanerio))) + geom_line() + facet_grid(pop+nmult~h2+neur) + scale_colour_brewer(type="qual") +
+    ylim(0, 1)
+ggsave(p1, file="p6.png")
+```
