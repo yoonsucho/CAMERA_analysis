@@ -418,13 +418,27 @@ param <- expand.grid(
   bhet=0,
   h2=c(0.01),
   region=regions[1:5],
-  nsim=1:100
+  nsim=101:500
 )
 dim(param)
 ```
 
 
 ```{r}
-dres <- purrr::pmap(param, sim, .progress=TRUE) %>% bind_rows()
-saveRDS(res, here("results", "scenario_simulations2_c.rds"))
+res <- purrr::pmap(param, sim, .progress=TRUE) %>% bind_rows()
+saveRDS(res, here("results", "scenario_simulations2_d.rds"))
+```
+
+
+
+```{r}
+res <- readRDS(here("results", "scenario_simulations2_c.rds"))
+```
+
+
+```{r}
+p1 <- res %>% filter(bhet == 0) %>% group_by(scanerio, neur, nmult, h2, pop) %>% summarise(het=mean(Qjpval < 0.05,na.rm=T), n=n()) %>%
+    ggplot(aes(y=het, x=neur, color=factor(pop))) + geom_line() + facet_grid(scanerio~nmult*h2, labeller=label_both) + scale_colour_brewer(type="qual") +
+    geom_hline(yintercept=0.05, linetype="dotted")
+ggsave(p1, file="p1fdr.png")
 ```
