@@ -1,4 +1,4 @@
-# Trans ancestral design for Mendelian Randomization
+# Cross ancestral analysis for Mendelian randomization
 
 Develop trans-ancestral model for MR
 
